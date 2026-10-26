@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Sillage Fragrance"
+description = "A premium fragrance storefront for browsing verified catalog data, managing inventory, and completing secure PayPal sandbox orders."
+version = "1.0.0"
+id = "artifacts/sillage-fragrance"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23635
+
+[services.development]
+run = "pnpm --filter @workspace/sillage-fragrance run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/sillage-fragrance", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/sillage-fragrance/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23635"
+BASE_PATH = "/"
