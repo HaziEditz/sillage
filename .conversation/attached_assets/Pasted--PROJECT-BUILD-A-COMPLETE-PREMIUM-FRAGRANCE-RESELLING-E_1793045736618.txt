@@ -1,0 +1,789 @@
+# PROJECT: BUILD A COMPLETE PREMIUM FRAGRANCE RESELLING E-COMMERCE WEBSITE
+
+Act as a senior full-stack developer, software architect, e-commerce specialist, database engineer, security engineer and premium brand UI/UX designer.
+
+Build a complete, production-oriented fragrance reselling website using Replit. The website must be a real, functional application with a persistent database, secure admin dashboard, product catalogue, customer accounts, shopping cart, PayPal checkout, inventory management, order fulfilment and deployment configuration.
+
+This is not a landing-page-only project. Every major button, form, route, database operation and checkout action must work.
+
+The design reference is https://cainternational.co/.
+
+Study the reference website's overall retail structure, navigation, collection browsing, product presentation, bestseller sections, shopping experience and content hierarchy. Adapt those patterns for a premium fragrance retailer. Do not copy its logo, brand identity, exact text, copyrighted imagery or cricket-specific content.
+
+The result should feel like an established fragrance retailer with a distinctive identity, a polished shopping experience and a reliable backend.
+
+# PHASE 1 — INSPECT, PLAN AND ARCHITECT THE APPLICATION
+
+Before writing code:
+
+1. Inspect all existing project files, framework choices, routes, components, dependencies, database configuration and existing functionality.
+2. If this is a new project, establish a clean and maintainable full-stack architecture.
+3. If the project already exists, preserve working functionality and extend it rather than unnecessarily rebuilding it.
+4. Identify the required environment variables, external services, database tables and integrations.
+5. Create an implementation plan and work through it in logical stages.
+6. Test each important feature before moving on.
+7. Keep the application runnable throughout development.
+
+Do not create a frontend that relies on hardcoded arrays of products as its permanent data source. Seed data may be used during development, but production products must come from the database.
+
+Do not claim a feature works until it has been implemented and tested.
+
+# PHASE 2 — BRAND IDENTITY AND DESIGN DIRECTION
+
+Create a sophisticated fragrance retail brand. The business name, logo, favicon, tagline, contact information and brand settings must be configurable so they can be changed without rewriting application code.
+
+Use the following design direction:
+
+- Premium, modern, editorial e-commerce.
+- Strong typography and clear visual hierarchy.
+- High-quality fragrance product photography.
+- Large, impactful homepage imagery.
+- Refined navigation and collection browsing.
+- A clean, spacious layout that feels intentional rather than empty.
+- A restrained palette of warm white, ivory, black, charcoal and subtle neutral accents.
+- Elegant product cards and polished product detail pages.
+- Smooth, subtle transitions and restrained motion.
+- A consistent design system across storefront, checkout and account pages.
+- Responsive layouts designed for desktop, tablet and mobile.
+
+Use the reference website as a structural and usability guide. Adapt its retail navigation, category organisation, featured products and content sections to fragrance shopping.
+
+Do not make the site look like a generic AI-generated template. Avoid excessive gradients, glassmorphism, unnecessary rounded cards, random animations, oversized headings everywhere, excessive shadows and decorative elements that make shopping harder.
+
+Use realistic image ratios, consistent image crops, readable typography, sensible spacing and consistent button styles.
+
+Use original brand assets or imagery that is licensed or otherwise authorised for commercial use. If temporary placeholder images are necessary, make them easy to replace and never present placeholders as verified product photographs.
+
+Create reusable components for:
+- Header and navigation.
+- Announcement bar.
+- Product cards.
+- Product grids.
+- Category tiles.
+- Buttons and form fields.
+- Search.
+- Cart drawer.
+- Notifications and dialogs.
+- Breadcrumbs.
+- Pagination.
+- Footer.
+- Loading, empty and error states.
+
+The website must remain visually consistent across all pages.
+
+# PHASE 3 — STOREFRONT AND NAVIGATION
+
+Build a complete public storefront with the following pages.
+
+## 3.1 Homepage
+
+Create a visually impressive retail homepage with:
+
+1. A configurable announcement bar for promotions, shipping information or other notices.
+2. A header with brand logo, shop navigation, search, account and cart.
+3. A clear hero section with fragrance-focused imagery, a strong headline and a functional shop button.
+4. Featured fragrance collections.
+5. Bestselling products populated from actual database data.
+6. New arrivals populated from actual database data.
+7. Brand collections or featured brands.
+8. Optional promotional sections for selected collections.
+9. A fragrance discovery section that helps customers browse by scent family.
+10. An editorial or fragrance education section.
+11. A newsletter signup section with working email capture.
+12. A complete footer containing useful customer information and policy links.
+
+Allow administrators to control featured products, collection ordering, announcement text, homepage imagery and promotional content through the dashboard.
+
+Do not display fabricated sales figures, fake testimonials, fake reviews or misleading scarcity messages.
+
+Hide empty sections or provide a deliberate empty state until products have been added.
+
+## 3.2 Header and collection navigation
+
+Build an intuitive navigation system inspired by established retail websites.
+
+Include:
+- Home.
+- Shop All.
+- New Arrivals.
+- Bestsellers.
+- Brands.
+- Men's Fragrances.
+- Women's Fragrances.
+- Unisex Fragrances.
+- Fragrance Discovery or other configurable categories.
+- Account.
+- Search.
+- Shopping cart.
+
+Use dropdowns or a mega-menu on desktop where appropriate. On mobile, use a properly functioning navigation drawer with accessible open and close controls.
+
+All categories and menu items must link to real pages or collections. Do not leave dead links.
+
+## 3.3 Shop and collection pages
+
+Implement:
+- Product grids.
+- Search by fragrance name and brand.
+- Filtering by brand, price, size, concentration, scent family and availability.
+- Sorting by price, newest, popularity and alphabetical order.
+- Pagination or efficient incremental loading.
+- Clear active filters.
+- Reset filters.
+- Product count.
+- Empty search results with a useful message.
+- Out-of-stock indicators.
+- Responsive product cards.
+
+Every filter and sort option must operate on actual product data. Use appropriate server-side filtering and pagination when the catalogue grows.
+
+## 3.4 Product cards
+
+Each card should display relevant information:
+- Product image.
+- Brand.
+- Product name.
+- Bottle size or selected variant where appropriate.
+- Selling price.
+- Optional comparison price when a genuine discount exists.
+- Availability status.
+- Optional administrator-controlled badges such as New or Bestseller.
+- A working product-detail link.
+- Optional quick-add functionality where variants can be selected safely.
+
+Ensure that product images, names, prices and availability always match the corresponding database record.
+
+## 3.5 Individual product pages
+
+Create detailed product pages containing:
+- Product image gallery.
+- Brand and product name.
+- Fragrance concentration.
+- Bottle size selector.
+- Correct price for the selected variant.
+- Stock availability.
+- Quantity selector with stock limits.
+- Add-to-cart button.
+- Clear sold-out state.
+- Product description.
+- Fragrance notes where verified.
+- Scent family and relevant attributes.
+- Shipping information.
+- Returns information.
+- Related products.
+- Recently viewed products, where appropriate.
+
+Changing a variant must update the displayed price, availability and selected SKU.
+
+Prevent the purchase of unpublished products, invalid variants and unavailable stock.
+
+Never invent fragrance notes, authenticity claims, official partnerships or product specifications. Allow administrators to leave unknown fields blank.
+
+# PHASE 4 — DATABASE AND PRODUCT CATALOGUE
+
+Use a persistent relational database, preferably PostgreSQL.
+
+Use the existing database if it is already correctly configured. Otherwise, configure an appropriate persistent database supported by the chosen Replit deployment.
+
+Use a maintainable database layer, such as Drizzle ORM or Prisma, if compatible with the project.
+
+Create appropriate database models for:
+
+- Users.
+- User roles.
+- Customer addresses.
+- Products.
+- Product variants.
+- Product images.
+- Brands.
+- Collections and collection memberships.
+- Inventory and inventory movements.
+- Shopping carts and cart items, where persistence is supported.
+- Orders.
+- Order items.
+- Payments.
+- Refunds.
+- Shipping records.
+- Discount codes.
+- Newsletter subscriptions.
+- Store settings.
+- Payment webhook events.
+- Administrative audit logs.
+
+Use database migrations, foreign keys, unique constraints, validation and appropriate indexes.
+
+## Product fields
+
+Support the following product information:
+
+- Product name.
+- Brand.
+- Slug.
+- SKU.
+- Description.
+- Fragrance concentration.
+- Scent family.
+- Fragrance notes.
+- Gender or audience category, if applicable.
+- Product images.
+- Bottle sizes and variants.
+- Purchase cost.
+- Selling price.
+- Optional comparison price.
+- Stock quantity.
+- Low-stock threshold.
+- Product status.
+- Featured and bestseller flags.
+- Creation and update timestamps.
+
+Each variant must have its own identifier, SKU, price and stock quantity where appropriate.
+
+Store prices using integer minor units or a suitable exact decimal type. Never rely on floating-point arithmetic for financial calculations.
+
+Store the original product cost associated with an order item so that historical profit reports do not change when an administrator later edits the product's purchase cost.
+
+Products, orders, customers and inventory must persist after application restarts and deployments.
+
+# PHASE 5 — PRIVATE ADMIN DASHBOARD
+
+Build a complete admin dashboard at /admin.
+
+The dashboard must be integrated with the existing application and use the same database as the storefront.
+
+## 5.1 Authentication and permissions
+
+Implement secure authentication and server-side role-based access control.
+
+Only authorised administrators may access administrative pages, API endpoints and administrative actions.
+
+Do not grant administrator privileges based on a query parameter, a user-controlled field, a frontend condition or a publicly accessible registration form.
+
+Provide a secure, documented process for initial administrator creation. Do not hardcode a default administrator password.
+
+A normal customer must never be able to access the dashboard by simply visiting /admin.
+
+Protect all admin API routes on the server, not merely by hiding navigation links.
+
+## 5.2 Admin overview
+
+Display real database-backed information:
+- Total orders.
+- Paid sales.
+- Refunds.
+- Net sales.
+- Average order value.
+- Estimated gross profit.
+- Bestselling fragrances.
+- Low-stock products.
+- Recent orders.
+- Orders awaiting fulfilment.
+- Recent payment failures requiring attention.
+
+Include sensible date filters and clear definitions for financial metrics.
+
+Do not include unpaid or failed orders in paid sales. Distinguish gross sales, refunds, net sales and estimated gross profit.
+
+## 5.3 Product management
+
+Build a fully functional product-management interface.
+
+Administrators must be able to:
+
+- Add a product.
+- Edit a product.
+- Upload and replace product images.
+- Add and edit bottle sizes.
+- Set variant prices and SKUs.
+- Update purchase costs.
+- Set stock quantities.
+- Configure descriptions and product attributes.
+- Assign brands and collections.
+- Mark products as featured or bestselling.
+- Save drafts.
+- Publish and unpublish products.
+- Archive products.
+- Search and filter products.
+- Bulk-update selected fields where safe.
+- See validation errors and success notifications.
+
+Provide a practical Add Product form with clear sections and image previews.
+
+Image uploads must use persistent storage appropriate for production. Do not rely on temporary local filesystem paths that may disappear after deployment.
+
+Validate uploaded file types and sizes. Use secure file handling and generate or store stable image URLs.
+
+## 5.4 Inventory management
+
+Create a separate inventory view showing:
+- Current stock.
+- Stock movement history.
+- Low-stock alerts.
+- Out-of-stock items.
+- Variant-level inventory.
+- Manual stock adjustments with reasons.
+- The administrator who performed an adjustment.
+- Timestamps for stock changes.
+
+Prevent negative inventory and overselling.
+
+Use database transactions and appropriate concurrency controls when placing orders.
+
+Define a consistent stock-reservation or deduction strategy. Ensure payment failures, expired orders, cancellations and eligible refunds do not cause stock discrepancies.
+
+## 5.5 Order management
+
+Provide a complete order-management interface with:
+- Order number.
+- Customer information.
+- Order date.
+- Purchased products and variants.
+- Quantities and prices.
+- Shipping address.
+- Subtotal, shipping, discounts and final total.
+- Payment status.
+- Fulfilment status.
+- PayPal transaction identifiers.
+- Tracking number and carrier.
+- Internal administrative notes.
+
+Allow authorised administrators to search and filter orders, view order details, update fulfilment statuses and record shipping information.
+
+Use explicit order states and valid transitions. Record important changes in an audit trail.
+
+Never allow an ordinary administrator interface action to fabricate a successful PayPal capture.
+
+## 5.6 Customer management
+
+Allow administrators to view customer accounts and their relevant order history.
+
+Restrict sensitive information to authorised staff. Do not display password hashes, authentication tokens or payment secrets.
+
+Do not let administrators arbitrarily change a customer's identity or access credentials without a secure, auditable process.
+
+## 5.7 Discounts and promotions
+
+Support:
+- Percentage discounts.
+- Fixed-value discounts.
+- Minimum purchase amounts.
+- Expiration dates.
+- Usage limits.
+- Per-customer limits.
+- Active and inactive status.
+
+Validate coupon eligibility and recalculate discounts on the backend.
+
+Prevent discount stacking unless explicitly supported and configured.
+
+## 5.8 Store settings
+
+Provide configurable settings for:
+- Store name and logo.
+- Contact email.
+- Currency.
+- Shipping rates.
+- Free-shipping threshold.
+- Return and shipping policy links.
+- Announcement bar.
+- Homepage content.
+- Newsletter settings.
+- Tax configuration.
+- Low-stock threshold.
+- Supported delivery destinations.
+
+Changes should be stored persistently and reflected on the storefront without code edits wherever practical.
+
+# PHASE 6 — SHOPPING CART AND CHECKOUT
+
+Create a reliable cart and checkout experience.
+
+## Shopping cart
+
+Support:
+- Adding products.
+- Updating quantities.
+- Removing items.
+- Selecting product variants.
+- Displaying product images and prices.
+- Calculating subtotals.
+- Applying eligible discounts.
+- Showing shipping estimates where available.
+- Displaying the final total.
+- Handling items that become unavailable.
+
+Persist carts for signed-in customers and provide sensible guest-cart behaviour.
+
+Revalidate prices, variants and stock when a cart is loaded and again when checkout begins.
+
+Never trust client-submitted prices, totals, discounts or stock levels.
+
+## Checkout
+
+Collect only the information required to fulfil an order.
+
+Support:
+- Guest checkout or account checkout.
+- Customer email.
+- Recipient name.
+- Shipping address.
+- Delivery options.
+- Shipping costs.
+- Discount codes.
+- Order summary.
+- PayPal payment.
+- Clear terms, shipping and returns information.
+- Helpful validation errors.
+
+Make the checkout responsive and easy to use.
+
+Create internal order records using a safe and well-defined pending-payment workflow.
+
+Do not create duplicate orders when a customer refreshes, double-clicks a button or retries a request.
+
+# PHASE 7 — PAYPAL PAYMENT INTEGRATION
+
+Use PayPal's official Checkout APIs and supported SDKs.
+
+Reference:
+https://developer.paypal.com/checkout/integrate
+
+Implement payment processing through the backend.
+
+## Required behaviour
+
+1. The customer begins checkout.
+2. The server validates the cart and reads trusted prices and stock from the database.
+3. The server calculates the authoritative order total, including discounts and shipping.
+4. The server creates the PayPal order using the appropriate API.
+5. The customer approves payment through PayPal.
+6. The server captures the approved payment through PayPal.
+7. The server verifies the returned transaction information and payment status.
+8. Verified payment records are associated with the correct internal order.
+9. The order becomes paid only after successful verification.
+10. The inventory and fulfilment workflow are updated safely.
+11. The customer receives a confirmation email.
+
+## Security requirements
+
+- Use separate sandbox and live configurations.
+- Store PayPal credentials in Replit Secrets or secure deployment environment variables.
+- Never expose the PayPal client secret to the browser.
+- Never commit credentials to version control.
+- Never trust a frontend success redirect as proof of payment.
+- Verify the payment amount, currency, order reference and capture status.
+- Verify webhook signatures using the official PayPal verification mechanism.
+- Process webhook events idempotently.
+- Handle duplicate notifications and out-of-order events safely.
+- Prevent duplicate payment captures and duplicate stock deductions.
+- Record relevant payment identifiers and event-processing outcomes.
+- Never store raw card details.
+- Log payment errors without leaking secrets or sensitive customer data.
+
+Handle successful, pending, failed, cancelled, reversed and refunded payment states appropriately.
+
+Implement refunds through the appropriate PayPal API, with permission checks and persistent refund records.
+
+Do not mark a refund as successful until the result is verified.
+
+Provide documentation for creating a PayPal Developer application, obtaining sandbox credentials, configuring webhooks and switching to live mode.
+
+If credentials have not been supplied, build the integration but clearly report that real payment processing still requires configuration.
+
+Do not simulate successful payments in production.
+
+# PHASE 8 — ORDER FULFILMENT, SHIPPING AND EMAILS
+
+Create a clear fulfilment workflow.
+
+Support:
+- Paid orders awaiting processing.
+- Processing orders.
+- Shipped orders.
+- Delivered orders where delivery confirmation is available.
+- Eligible cancellations and refunds.
+
+Store tracking numbers and carrier information when provided.
+
+Send transactional emails for:
+- Order confirmation.
+- Payment confirmation where appropriate.
+- Shipping confirmation.
+- Tracking updates where supported.
+- Password recovery.
+- Account-related security notifications where appropriate.
+
+Use a transactional email provider with credentials stored securely in environment variables.
+
+If email credentials are unavailable, provide a clearly documented configuration process and avoid falsely reporting that emails were sent.
+
+Do not rely on the browser remaining open to complete order processing.
+
+Account for perfume shipping restrictions. Make delivery regions and shipping methods configurable, and verify carrier requirements for alcohol-based fragrances before offering a delivery option.
+
+# PHASE 9 — CUSTOMER ACCOUNTS
+
+Build a complete customer account system.
+
+Include:
+- Registration.
+- Login and logout.
+- Secure password hashing.
+- Password recovery.
+- Email verification where configured.
+- Customer profile.
+- Saved shipping addresses.
+- Order history.
+- Order details.
+- Account security.
+- Optional saved favourites or wishlist.
+
+Use secure sessions or an established authentication solution.
+
+Protect customer information with server-side authorisation checks. A customer must never be able to access another customer's orders or addresses by changing a URL or request parameter.
+
+Allow guest purchases without requiring an account if this fits the checkout design.
+
+# PHASE 10 — SEARCH ENGINE OPTIMISATION AND CONTENT
+
+Implement:
+- Search-engine-friendly URLs.
+- Product titles and descriptions.
+- Appropriate metadata.
+- Canonical URLs where appropriate.
+- XML sitemap.
+- Robots.txt.
+- Structured product data where accurate and supported.
+- Open Graph metadata.
+- Optimised image alt text.
+- Proper heading hierarchy.
+- Useful 404 handling.
+- Indexing rules that prevent private pages from being indexed.
+
+Build configurable content pages for:
+- About the brand.
+- Contact.
+- Shipping information.
+- Returns and refunds.
+- Privacy policy.
+- Terms and conditions.
+- Frequently asked questions.
+- Fragrance guides.
+
+Do not invent company history, customer testimonials, certifications, brand partnerships or authenticity guarantees.
+
+# PHASE 11 — NEW ZEALAND AND BUSINESS CONFIGURATION
+
+Configure the store initially for New Zealand, with:
+- NZD as the default currency.
+- New Zealand address and postcode fields.
+- Configurable domestic shipping rates.
+- Configurable delivery regions.
+- Appropriate privacy and consumer-policy pages.
+- Tax settings that can be adjusted to the business's actual circumstances.
+
+Do not assume GST registration status. Configure tax treatment according to the business's obligations and obtain appropriate advice before launch.
+
+Ensure product descriptions and authenticity claims are accurate. The store must not misrepresent itself as an official retailer or authorised distributor of fragrance brands without permission.
+
+Use authentic, legitimately sourced stock and maintain appropriate purchase records.
+
+# PHASE 12 — SECURITY, RELIABILITY AND PERFORMANCE
+
+Apply production-oriented engineering practices.
+
+## Security
+
+Implement:
+- Input validation on all sensitive endpoints.
+- Secure authentication and authorisation.
+- Protection against injection and cross-site scripting.
+- CSRF protection where applicable.
+- Rate limiting for sensitive operations.
+- Secure session cookie configuration.
+- Safe handling of user-uploaded files.
+- Protection of personal information.
+- Server-side validation of prices and discounts.
+- Restricted administrative endpoints.
+- Audit logging for important changes.
+- Appropriate security headers.
+- Safe error responses.
+
+Never put private credentials in client-side code, public configuration, error messages or logs.
+
+## Reliability
+
+Implement:
+- Database transactions for critical order operations.
+- Idempotency for payment and webhook processing.
+- Consistent inventory reconciliation.
+- Appropriate API timeouts and error handling.
+- Clear loading, empty and failure states.
+- Useful logs for diagnosing issues.
+- Health-check endpoint.
+- Database backup and recovery guidance.
+
+## Performance
+
+Implement:
+- Responsive image sizing and optimisation.
+- Lazy loading for appropriate images.
+- Efficient database queries.
+- Pagination for large datasets.
+- Sensible caching.
+- Code splitting where appropriate.
+- Mobile performance optimisation.
+- Avoidance of unnecessary dependencies.
+
+Do not sacrifice payment correctness or data integrity for performance.
+
+# PHASE 13 — TESTING AND QUALITY ASSURANCE
+
+Do not stop when the website looks finished.
+
+Write and run appropriate unit, integration and end-to-end tests.
+
+Test the following scenarios:
+
+## Storefront
+- Homepage renders with database-backed content.
+- Navigation and collection links work.
+- Search returns the correct products.
+- Filters and sorting work.
+- Product variants display the correct prices.
+- Cart quantities and totals are accurate.
+- Mobile navigation works.
+- Empty and error states are handled correctly.
+
+## Admin
+- Admin login works.
+- Unauthorised users cannot access admin routes or APIs.
+- Products can be created, edited, published, unpublished and archived.
+- Image uploads persist.
+- Stock adjustments are recorded.
+- Changes appear on the public storefront.
+- Orders and analytics reflect actual database data.
+
+## Payments and orders
+- PayPal sandbox checkout succeeds.
+- Payment cancellation works.
+- Failed payments do not mark orders as paid.
+- Incorrect amounts and currencies are rejected.
+- Webhook signature verification works.
+- Duplicate webhooks do not duplicate order processing.
+- Duplicate captures and inventory deductions are prevented.
+- Refunds are recorded accurately.
+- Stock cannot be oversold.
+- Order states remain consistent after failures and retries.
+
+## Accounts and privacy
+- Registration and login work.
+- Password recovery works when configured.
+- Customers cannot access other customers' orders.
+- Customer data is protected.
+- Session and permission checks are enforced server-side.
+
+## Deployment
+- Database records persist after restart.
+- Production configuration is documented.
+- Missing environment variables produce useful errors.
+- The production build starts correctly.
+- The application does not depend on temporary development files.
+
+Fix confirmed defects and rerun relevant tests.
+
+Never disable validation or tests merely to make the build pass. Do not fabricate test results.
+
+# PHASE 14 — DEPLOYMENT ON REPLIT
+
+Prepare the project for deployment.
+
+Configure:
+- Production start command.
+- Persistent PostgreSQL database.
+- Database migrations.
+- Environment variables and secrets.
+- Persistent image storage.
+- PayPal sandbox configuration.
+- Live-payment configuration.
+- Email-provider configuration.
+- Health checks.
+- Error logging.
+- Custom-domain setup instructions.
+- Backup and recovery guidance.
+- Deployment and rollback instructions.
+
+Ensure that production URLs, PayPal return URLs, webhook URLs and email links use the correct deployed domain.
+
+Never assume that a local development database, temporary image directory or development server will remain available in production.
+
+Keep sandbox and live payment environments clearly separated.
+
+# PHASE 15 — OPTIONAL FUTURE SAAS READINESS
+
+Build the initial application as a single-store e-commerce business. Do not overcomplicate the initial release with a multi-tenant SaaS platform.
+
+However, keep the code modular so a future version can support:
+- Multiple independent fragrance retailers.
+- Separate store settings and catalogues.
+- Tenant-scoped inventory and orders.
+- Monthly subscription plans.
+- Subscription billing and cancellation.
+- Usage limits and feature entitlements.
+- Secure isolation between businesses.
+- A platform-level administration area.
+
+Do not expose these future features as if they already work.
+
+Do not introduce subscription payments into the initial customer checkout unless explicitly requested. The first priority is selling fragrances successfully.
+
+# PHASE 16 — FINAL ACCEPTANCE CRITERIA
+
+The project is not considered complete until the following core journey works:
+
+1. An administrator securely logs in.
+2. The administrator adds a fragrance, uploads images, enters a price and records stock.
+3. The administrator publishes the product.
+4. The product appears on the live storefront.
+5. A customer searches for and views the product.
+6. The customer adds the correct variant to the cart.
+7. The backend calculates the correct checkout total.
+8. The customer completes a PayPal sandbox payment.
+9. The server verifies payment successfully.
+10. The internal order is marked paid exactly once.
+11. Inventory is updated correctly.
+12. The customer receives an order confirmation when email is configured.
+13. The order appears in the admin dashboard.
+14. The administrator can update fulfilment and record tracking.
+15. The product, customer and order records persist after restarting the application.
+
+Also verify that failed payments, duplicate webhook events, insufficient inventory and unauthorised requests are handled safely.
+
+# FINAL INSTRUCTIONS TO REPLIT AGENT
+
+Build the complete application, not just a visual demonstration.
+
+Prioritise:
+1. Correct architecture and persistent database.
+2. Distinctive, polished retail design.
+3. Functional product management and inventory.
+4. Secure customer accounts and admin access.
+5. Reliable PayPal payments.
+6. Correct order management and fulfilment.
+7. Testing, security and deployment readiness.
+
+Work in stages. Inspect the existing code, make a plan, implement the features, test them and fix discovered defects.
+
+Use sensible defaults for non-essential decisions, but do not invent business credentials, product data, payment results or successful test results.
+
+At the end, provide a clear implementation report stating:
+- What has been implemented.
+- What has been tested and the actual results.
+- Which integrations are configured.
+- Which secrets or credentials I must supply.
+- Which features remain incomplete.
+- How to add products through the admin dashboard.
+- How to test PayPal sandbox checkout.
+- How to deploy the site.
+- What remains before accepting real payments.
+
+The final result must be a maintainable, secure and genuinely usable fragrance e-commerce business with a polished retail experience inspired by the reference website.
