@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" role="img" aria-label="Sillage">
-  <rect width="240" height="64" fill="#f6f3ec"/>
-  <text x="120" y="44" text-anchor="middle" fill="#292723" font-family="Georgia, 'Times New Roman', serif" font-size="42" letter-spacing="-2">sillage</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 76" role="img" aria-label="Arvessó Fragrances">
+  <rect width="320" height="76" fill="#f6f3ec"/>
+  <text x="160" y="43" text-anchor="middle" fill="#292723" font-family="Georgia, 'Times New Roman', serif" font-size="35" letter-spacing="-1.5">Arvessó</text>
+  <text x="160" y="63" text-anchor="middle" fill="#706d65" font-family="Arial, sans-serif" font-size="8" letter-spacing="3.2">FRAGRANCES</text>
 </svg>

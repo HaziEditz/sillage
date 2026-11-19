@@ -80,6 +80,7 @@ export const ordersTable = pgTable(
     region: text("region"),
     postcode: text("postcode").notNull(),
     subtotalMinor: integer("subtotal_minor").notNull(),
+    discountMinor: integer("discount_minor").notNull().default(0),
     shippingMinor: integer("shipping_minor").notNull().default(0),
     totalMinor: integer("total_minor").notNull(),
     currency: text("currency").notNull().default("NZD"),

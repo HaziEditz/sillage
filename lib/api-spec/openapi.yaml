@@ -160,6 +160,22 @@ paths:
           description: Authentication or admin permission required
         "404":
           description: Product not found
+    delete:
+      operationId: deleteProduct
+      tags: [admin]
+      summary: Delete a fragrance and its sizes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "204":
+          description: Product deleted
+        "401":
+          description: Authentication or admin permission required
+        "404":
+          description: Product not found
   /admin/inventory/adjustments:
     post:
       operationId: adjustInventory
@@ -403,12 +419,13 @@ components:
         cancelToken: { type: string }
     Order:
       type: object
-      required: [id, orderNumber, email, status, totalMinor, currency, createdAt]
+      required: [id, orderNumber, email, status, discountMinor, totalMinor, currency, createdAt]
       properties:
         id: { type: integer }
         orderNumber: { type: string }
         email: { type: string }
         status: { type: string, enum: [pending, paid, failed, cancelled, refunded] }
+        discountMinor: { type: integer }
         totalMinor: { type: integer }
         currency: { type: string }
         paypalOrderId: { type: ["string", "null"] }
@@ -438,4 +455,3 @@ components:
         recentOrders:
           type: array
           items: { $ref: "#/components/schemas/Order" }
-

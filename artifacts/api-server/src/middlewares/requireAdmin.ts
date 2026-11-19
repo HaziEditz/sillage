@@ -8,6 +8,17 @@ const adminEmails = new Set(
     .filter(Boolean),
 );
 
+export async function isAdminUser(userId: string): Promise<boolean> {
+  if (adminEmails.size === 0) return false;
+
+  const user = await clerkClient.users.getUser(userId);
+  const primary = user.emailAddresses.find(
+    (address) => address.id === user.primaryEmailAddressId,
+  );
+  const email = primary?.emailAddress.toLowerCase();
+  return Boolean(email && adminEmails.has(email));
+}
+
 export async function requireAdmin(
   req: Request,
   res: Response,
@@ -19,20 +30,8 @@ export async function requireAdmin(
     return;
   }
 
-  if (adminEmails.size === 0) {
-    res.status(403).json({
-      error: "Admin access has not been configured for this store.",
-    });
-    return;
-  }
-
   try {
-    const user = await clerkClient.users.getUser(userId);
-    const primary = user.emailAddresses.find(
-      (address) => address.id === user.primaryEmailAddressId,
-    );
-    const email = primary?.emailAddress.toLowerCase();
-    if (!email || !adminEmails.has(email)) {
+    if (!(await isAdminUser(userId))) {
       res.status(403).json({ error: "Administrator access required." });
       return;
     }

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import * as schema from "./schema";
@@ -10,7 +12,27 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
-export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const sslRootCertPath = process.env.PGSSLROOTCERT;
+const ssl = sslRootCertPath
+  ? { ca: readFileSync(resolve(process.cwd(), sslRootCertPath), "utf8") }
+  : undefined;
+const connectionUrl = new URL(process.env.DATABASE_URL);
+if (ssl) {
+  for (const parameter of [
+    "sslmode",
+    "sslrootcert",
+    "sslcert",
+    "sslkey",
+    "sslpassword",
+  ]) {
+    connectionUrl.searchParams.delete(parameter);
+  }
+}
+
+export const pool = new Pool({
+  connectionString: connectionUrl.toString(),
+  ...(ssl ? { ssl } : {}),
+});
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";

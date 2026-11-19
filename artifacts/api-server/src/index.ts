@@ -1,5 +1,10 @@
+import { pool } from "@workspace/db";
 import app from "./app";
 import { logger } from "./lib/logger";
+
+pool.on("error", (err) => {
+  logger.error({ err }, "Unexpected PostgreSQL client error");
+});
 
 const rawPort = process.env["PORT"];
 

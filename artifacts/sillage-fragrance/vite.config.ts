@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
+const workspaceRoot = path.resolve(import.meta.dirname, '../..');
 const rawPort = process.env.PORT;
 
 if (!rawPort) {
@@ -29,6 +30,7 @@ if (!basePath) {
 
 export default defineConfig({
   base: basePath,
+  envDir: workspaceRoot,
   plugins: [
     react(),
     tailwindcss({ optimize: false }),
@@ -69,6 +71,9 @@ export default defineConfig({
     strictPort: true,
     host: '0.0.0.0',
     allowedHosts: true,
+    proxy: {
+      '/api': 'http://localhost:5001',
+    },
     fs: {
       strict: true,
     },

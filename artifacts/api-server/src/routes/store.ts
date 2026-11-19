@@ -50,12 +50,20 @@ import {
   productVariantsTable,
   productsTable,
 } from "@workspace/db";
-import { requireAdmin } from "../middlewares/requireAdmin";
+import {
+  DISCOUNT_PERCENT,
+  DISCOUNT_THRESHOLD_MINOR,
+  FREE_SHIPPING_THRESHOLD_MINOR,
+  shippingForSubtotal,
+  discountForSubtotal,
+} from "../lib/pricing";
+import { isAdminUser, requireAdmin } from "../middlewares/requireAdmin";
 
 const router: IRouter = Router();
-const PAYPAL_API = "https://api-m.sandbox.paypal.com";
 const LOW_STOCK_THRESHOLD = 5;
 const NZD = "NZD";
+
+type PayPalMode = "sandbox" | "live";
 
 type ProductRow = typeof productsTable.$inferSelect;
 type VariantRow = typeof productVariantsTable.$inferSelect;
@@ -116,6 +124,7 @@ function toOrder(row: OrderRow) {
     orderNumber: row.orderNumber,
     email: row.email,
     status: row.status,
+    discountMinor: row.discountMinor,
     totalMinor: row.totalMinor,
     currency: row.currency,
     paypalOrderId: row.paypalOrderId,
@@ -136,13 +145,83 @@ function money(minor: number) {
   return (minor / 100).toFixed(2);
 }
 
-function paypalCredentials() {
-  const clientId = process.env.PAYPAL_SANDBOX_CLIENT_ID;
-  const secret = process.env.PAYPAL_SANDBOX_CLIENT_SECRET;
+function paypalMode(): PayPalMode {
+  const mode = process.env.PAYPAL_MODE ?? "sandbox";
+  if (mode !== "sandbox" && mode !== "live") {
+    throw new Error('PAYPAL_MODE must be either "sandbox" or "live".');
+  }
+  return mode;
+}
+
+function paypalApi(mode: PayPalMode) {
+  return mode === "live"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
+}
+
+function paypalCredentials(mode: PayPalMode) {
+  const clientId = process.env[
+    mode === "live" ? "PAYPAL_LIVE_CLIENT_ID" : "PAYPAL_SANDBOX_CLIENT_ID"
+  ];
+  const secret = process.env[
+    mode === "live" ? "PAYPAL_LIVE_CLIENT_SECRET" : "PAYPAL_SANDBOX_CLIENT_SECRET"
+  ];
   if (!clientId || !secret) {
-    throw new Error("PayPal sandbox credentials are not configured.");
+    throw new Error(`PayPal ${mode} credentials are not configured.`);
   }
   return { clientId, secret };
+}
+
+function shippingFeeMinor(mode: PayPalMode) {
+  const configuredFee = process.env.SHIPPING_FEE_MINOR;
+  if (configuredFee === undefined) {
+    if (mode === "live") {
+      throw new Error("Set SHIPPING_FEE_MINOR before enabling live checkout.");
+    }
+    return 0;
+  }
+  if (!/^\d+$/.test(configuredFee)) {
+    throw new Error("SHIPPING_FEE_MINOR must be a non-negative integer in cents.");
+  }
+  const fee = Number(configuredFee);
+  if (!Number.isSafeInteger(fee)) {
+    throw new Error("SHIPPING_FEE_MINOR must be a safe integer in cents.");
+  }
+  return fee;
+}
+
+function livePublicAppUrl() {
+  const configuredUrl = process.env.PUBLIC_APP_URL;
+  if (!configuredUrl) {
+    throw new Error("Set PUBLIC_APP_URL to your public HTTPS store URL before enabling live checkout.");
+  }
+  let url: URL;
+  try {
+    url = new URL(configuredUrl);
+  } catch {
+    throw new Error("PUBLIC_APP_URL must be a valid public HTTPS URL.");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+  ) {
+    throw new Error("PUBLIC_APP_URL must be a public HTTPS base URL without credentials, query, or fragment.");
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+
+function paypalModeForOrder(order: OrderRow): PayPalMode {
+  if (!order.paypalApprovalUrl) {
+    throw new Error("PayPal approval URL is missing for this order.");
+  }
+  const hostname = new URL(order.paypalApprovalUrl).hostname;
+  if (hostname === "www.sandbox.paypal.com") return "sandbox";
+  if (hostname === "www.paypal.com" || hostname === "paypal.com") return "live";
+  throw new Error("PayPal approval URL host is not recognized.");
 }
 
 function cancelTokenFor(requestId: string) {
@@ -153,9 +232,9 @@ function cancelTokenFor(requestId: string) {
   return createHmac("sha256", sessionSecret).update(requestId).digest("hex");
 }
 
-async function paypalAccessToken(): Promise<string> {
-  const { clientId, secret } = paypalCredentials();
-  const response = await fetch(`${PAYPAL_API}/v1/oauth2/token`, {
+async function paypalAccessToken(mode: PayPalMode): Promise<string> {
+  const { clientId, secret } = paypalCredentials(mode);
+  const response = await fetch(`${paypalApi(mode)}/v1/oauth2/token`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${Buffer.from(`${clientId}:${secret}`).toString("base64")}`,
@@ -165,7 +244,7 @@ async function paypalAccessToken(): Promise<string> {
     signal: AbortSignal.timeout(12_000),
   });
   if (!response.ok) {
-    throw new Error("PayPal could not authorize the sandbox request.");
+    throw new Error(`PayPal could not authorize the ${mode} request.`);
   }
   const result = (await response.json()) as { access_token?: string };
   if (!result.access_token) throw new Error("PayPal returned no access token.");
@@ -176,9 +255,10 @@ async function paypalRequest<T>(
   path: string,
   init: RequestInit = {},
   requestId?: string,
+  mode: PayPalMode = paypalMode(),
 ): Promise<T> {
-  const token = await paypalAccessToken();
-  const response = await fetch(`${PAYPAL_API}${path}`, {
+  const token = await paypalAccessToken(mode);
+  const response = await fetch(`${paypalApi(mode)}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -195,7 +275,8 @@ async function paypalRequest<T>(
   return (await response.json()) as T;
 }
 
-function publicBaseUrl(req: Request) {
+function publicBaseUrl(req: Request, mode: PayPalMode) {
+  if (mode === "live") return livePublicAppUrl();
   const domain = (
     process.env.REPLIT_DOMAINS ??
     process.env.REPLIT_DEV_DOMAIN ??
@@ -204,6 +285,22 @@ function publicBaseUrl(req: Request) {
     .split(",")[0]
     .trim();
   if (domain) return `https://${domain}`;
+  if (process.env.NODE_ENV !== "production") {
+    const origin = req.get("origin");
+    if (origin) {
+      try {
+        const url = new URL(origin);
+        if (
+          url.protocol === "http:" &&
+          ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+        ) {
+          return url.origin;
+        }
+      } catch {
+        throw new Error("The checkout origin is invalid.");
+      }
+    }
+  }
   if (process.env.NODE_ENV !== "production" && req.get("host")) {
     return `${req.protocol}://${req.get("host")}`;
   }
@@ -300,6 +397,54 @@ router.get("/products", async (req, res): Promise<void> => {
       total: totals[0]?.total ?? 0,
     }),
   );
+});
+
+router.get("/admin/access", async (req, res): Promise<void> => {
+  const { userId } = getAuth(req);
+  if (!userId) {
+    res.status(401).json({ error: "Sign in to continue." });
+    return;
+  }
+
+  try {
+    res.json({ isAdmin: await isAdminUser(userId) });
+  } catch (error) {
+    req.log.error({ error, userId }, "Failed to verify admin identity");
+    res.status(503).json({ error: "Could not verify admin access." });
+  }
+});
+
+router.get("/checkout/config", (req, res): void => {
+  try {
+    const mode = paypalMode();
+    const shippingMinor = shippingFeeMinor(mode);
+    const credentialsConfigured = Boolean(
+      process.env[
+        mode === "live" ? "PAYPAL_LIVE_CLIENT_ID" : "PAYPAL_SANDBOX_CLIENT_ID"
+      ] &&
+        process.env[
+          mode === "live" ? "PAYPAL_LIVE_CLIENT_SECRET" : "PAYPAL_SANDBOX_CLIENT_SECRET"
+        ],
+    );
+    const liveReady =
+      mode === "sandbox" ||
+      (process.env.PAYPAL_LIVE_CHECKOUT_ENABLED === "true" &&
+        process.env.STORE_POLICIES_FINAL === "true" &&
+        Boolean(livePublicAppUrl()));
+    res.json({
+      mode,
+      shippingMinor,
+      freeShippingThresholdMinor: FREE_SHIPPING_THRESHOLD_MINOR,
+      discountThresholdMinor: DISCOUNT_THRESHOLD_MINOR,
+      discountPercent: DISCOUNT_PERCENT,
+      checkoutEnabled: credentialsConfigured && liveReady,
+    });
+  } catch (error) {
+    req.log.error({ error }, "PayPal checkout configuration is invalid");
+    res.status(503).json({
+      error: error instanceof Error ? error.message : "PayPal checkout is not configured.",
+    });
+  }
 });
 
 router.get("/products/:slug", async (req, res): Promise<void> => {
@@ -442,6 +587,23 @@ router.patch("/admin/products/:id", requireAdmin, async (req, res): Promise<void
   res.json(UpdateProductResponse.parse(product));
 });
 
+router.delete("/admin/products/:id", requireAdmin, async (req, res): Promise<void> => {
+  const params = UpdateProductParams.safeParse(req.params);
+  if (!params.success) {
+    res.status(400).json({ error: params.error.message });
+    return;
+  }
+  const [row] = await db
+    .delete(productsTable)
+    .where(eq(productsTable.id, params.data.id))
+    .returning({ id: productsTable.id });
+  if (!row) {
+    res.status(404).json({ error: "Fragrance not found." });
+    return;
+  }
+  res.status(204).end();
+});
+
 router.post(
   "/admin/inventory/adjustments",
   requireAdmin,
@@ -494,16 +656,55 @@ router.get("/admin/orders", requireAdmin, async (_req, res): Promise<void> => {
   res.json(GetAdminOrdersResponse.parse(orders.map(toOrder)));
 });
 
+router.get("/account/orders", async (req, res): Promise<void> => {
+  const clerkUserId = getAuth(req).userId;
+  if (!clerkUserId) {
+    res.status(401).json({ error: "Sign in to view your orders." });
+    return;
+  }
+
+  const orders = await db
+    .select({
+      orderNumber: ordersTable.orderNumber,
+      status: ordersTable.status,
+      totalMinor: ordersTable.totalMinor,
+      currency: ordersTable.currency,
+      createdAt: ordersTable.createdAt,
+      paidAt: ordersTable.paidAt,
+    })
+    .from(ordersTable)
+    .where(eq(ordersTable.clerkUserId, clerkUserId))
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(25);
+
+  res.json(orders);
+});
+
 router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
   const parsed = CreatePayPalOrderBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
+  let mode: PayPalMode;
+  let shippingMinor: number;
+  let baseUrl: string;
   try {
-    paypalCredentials();
-  } catch {
-    res.status(503).json({ error: "PayPal sandbox is not configured." });
+    mode = paypalMode();
+    paypalCredentials(mode);
+    if (mode === "live" && process.env.PAYPAL_LIVE_CHECKOUT_ENABLED !== "true") {
+      throw new Error("Live checkout is disabled until store setup is complete.");
+    }
+    if (mode === "live" && process.env.STORE_POLICIES_FINAL !== "true") {
+      throw new Error("Finalize and review store policies before enabling live checkout.");
+    }
+    shippingMinor = shippingFeeMinor(mode);
+    baseUrl = publicBaseUrl(req, mode);
+  } catch (error) {
+    req.log.warn({ error }, "PayPal checkout is not ready");
+    res.status(503).json({
+      error: error instanceof Error ? error.message : "PayPal checkout is not configured.",
+    });
     return;
   }
   const input = parsed.data;
@@ -536,8 +737,6 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
   for (const line of input.lines) {
     quantities.set(line.variantId, (quantities.get(line.variantId) ?? 0) + line.quantity);
   }
-  const baseUrl = publicBaseUrl(req);
-
   let pendingOrder: { order: OrderRow; totalMinor: number };
   try {
     pendingOrder = await db.transaction(async (tx) => {
@@ -562,6 +761,19 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
       }
       const productById = new Map(products.map((product) => [product.id, product]));
       const variantById = new Map(variants.map((variant) => [variant.id, variant]));
+      if (
+        mode === "live" &&
+        [...quantities.keys()].some((variantId) => {
+          const variant = variantById.get(variantId);
+          const product = variant && productById.get(variant.productId);
+          return (
+            variant?.sku.startsWith("ARV-TEST-") ||
+            product?.name.toUpperCase().includes("TEST ONLY")
+          );
+        })
+      ) {
+        throw new Error("Test-only fragrances cannot be purchased through live checkout.");
+      }
       let subtotalMinor = 0;
       for (const [variantId, quantity] of quantities) {
         const variant = variantById.get(variantId);
@@ -570,8 +782,9 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
         }
         subtotalMinor += variant.priceMinor * quantity;
       }
-      const shippingMinor = 0;
-      const totalMinor = subtotalMinor + shippingMinor;
+      const discountMinor = discountForSubtotal(subtotalMinor);
+      const chargedShippingMinor = shippingForSubtotal(subtotalMinor, shippingMinor);
+      const totalMinor = subtotalMinor - discountMinor + chargedShippingMinor;
       const orderNumber = `SF-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 4).toUpperCase()}`;
       const [order] = await tx
         .insert(ordersTable)
@@ -586,7 +799,8 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
           region: input.region ?? null,
           postcode: input.postcode,
           subtotalMinor,
-          shippingMinor,
+          discountMinor,
+          shippingMinor: chargedShippingMinor,
           totalMinor,
           currency: NZD,
           status: "pending",
@@ -658,7 +872,7 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
             },
           ],
           application_context: {
-            brand_name: "Sillage Fragrance",
+            brand_name: "Arvessó Fragrances",
             user_action: "PAY_NOW",
             return_url: `${baseUrl}/order-confirmation/${pendingOrder.order.id}`,
             cancel_url: `${baseUrl}/checkout?cancelled=${pendingOrder.order.id}`,
@@ -666,6 +880,7 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
         }),
       },
       input.requestId,
+      mode,
     );
     const approvalUrl = paypalOrder.links?.find(
       (link) => link.rel === "approve" || link.rel === "payer-action",
@@ -748,6 +963,7 @@ router.post("/checkout/paypal/capture", async (req, res): Promise<void> => {
       `/v2/checkout/orders/${encodeURIComponent(order.paypalOrderId!)}/capture`,
       { method: "POST", body: "{}" },
       `${order.requestId}-capture`,
+      paypalModeForOrder(order),
     );
     const purchaseUnit = capture.purchase_units?.[0];
     const payment = purchaseUnit?.payments?.captures?.[0];
@@ -827,6 +1043,9 @@ router.post("/checkout/paypal/cancel", async (req, res): Promise<void> => {
     try {
       const remote = await paypalRequest<{ status?: string }>(
         `/v2/checkout/orders/${encodeURIComponent(order.paypalOrderId)}`,
+        {},
+        undefined,
+        paypalModeForOrder(order),
       );
       if (remote.status === "APPROVED" || remote.status === "COMPLETED") {
         res.status(409).json({

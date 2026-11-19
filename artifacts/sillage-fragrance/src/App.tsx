@@ -1,13 +1,13 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
-import { Link, Redirect, Route, Switch, Router as WouterRouter, useLocation, useParams } from 'wouter';
-import { ClerkProvider, Show, SignIn, SignUp, useClerk, useUser } from '@clerk/react';
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, Route, Switch, Router as WouterRouter, useLocation, useParams } from 'wouter';
+import { ClerkProvider, Show, SignIn, SignUp, UserProfile, useClerk, useUser } from '@clerk/react';
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import {
-  ArrowLeft, ArrowRight, Check, CircleHelp,
-  LoaderCircle, Menu, Minus, Package, Plus, Search, ShieldCheck, ShoppingBag,
-  Trash2, Truck, X,
+  ArrowLeft, ArrowRight, Check, CircleHelp, Instagram,
+  KeyRound, LoaderCircle, LogOut, Menu, Minus, Package, PackageCheck, Plus, Search, ShieldCheck, ShoppingBag,
+  Trash2, Truck, UserRound, X,
 } from 'lucide-react';
 import {
   getGetAdminDashboardQueryKey, getGetAdminOrdersQueryKey, getGetAdminProductsQueryKey,
@@ -87,6 +87,18 @@ const clerkAppearance = {
 };
 const money = (minor: number, currency = 'NZD') => new Intl.NumberFormat('en-NZ', { style: 'currency', currency }).format(minor / 100);
 type CartEntry = { variantId: number; quantity: number; product: Product; variant: ProductVariant };
+type PayPalCheckoutConfig = {
+  mode: 'sandbox' | 'live';
+  shippingMinor: number;
+  freeShippingThresholdMinor: number;
+  discountThresholdMinor: number;
+  discountPercent: number;
+  checkoutEnabled: boolean;
+};
+function deliveryForSubtotal(config: PayPalCheckoutConfig | undefined, subtotalMinor: number) {
+  if (!config) return undefined;
+  return subtotalMinor > config.freeShippingThresholdMinor ? 0 : config.shippingMinor;
+}
 const CART_KEY = 'sillage-cart-v1';
 
 function useCart() {
@@ -106,15 +118,58 @@ function useCart() {
 }
 type CartApi = ReturnType<typeof useCart>;
 
+function useAdminAccess() {
+  const { user, isLoaded } = useUser();
+  const { data: isAdmin } = useQuery({
+    queryKey: ['admin', 'access', user?.id],
+    enabled: isLoaded && Boolean(user),
+    retry: false,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const response = await fetch('/api/admin/access', { credentials: 'include' });
+      if (!response.ok) {
+        throw new Error(`Admin access check failed (${response.status}).`);
+      }
+
+      const result: unknown = await response.json();
+      if (
+        typeof result !== 'object' ||
+        result === null ||
+        !('isAdmin' in result) ||
+        typeof result.isAdmin !== 'boolean'
+      ) {
+        throw new Error('Admin access check returned an invalid response.');
+      }
+      return result.isAdmin;
+    },
+  });
+  return isLoaded && Boolean(user) && isAdmin === true;
+}
+
+function AdminStudioLink({
+  label,
+  className,
+  testId,
+}: {
+  label: string;
+  className?: string;
+  testId: string;
+}) {
+  const isAdmin = useAdminAccess();
+  return isAdmin ? <Link href="/admin" className={className} data-testid={testId}>{label}</Link> : null;
+}
+
 function Header({ cart }: { cart: CartApi }) {
   return <header className="header">
-    <Link href="/" className="brand" data-testid="link-home">sillage</Link>
+    <Link href="/" className="brand" data-testid="link-home"><span>Arvessó</span><span className="brand-descriptor">FRAGRANCES</span></Link>
     <nav className="nav-links" aria-label="Main navigation">
-      <Link href="/shop" data-testid="link-shop">Fragrance</Link><a href={`${basePath || ''}/#approach`}>Our approach</a>
-      <Show when="signed-in"><Link href="/admin" data-testid="link-admin-navigation">Studio</Link></Show>
+      <Link href="/shop" data-testid="link-shop">Fragrance</Link><a href={`${basePath || ''}/#approach`}>Our approach</a><Link href="/account" data-testid="link-account-navigation">Account</Link>
+      <Show when="signed-in"><AdminStudioLink label="Studio" testId="link-admin-navigation"/></Show>
     </nav>
     <div className="header-actions">
       <AccountControls/>
+      <a className="icon-button social-link" href={STORE_INSTAGRAM} target="_blank" rel="noreferrer" aria-label="Instagram" data-testid="link-instagram"><Instagram size={16}/></a>
+      <Link href="/account" className="icon-button mobile-account" aria-label="My account" data-testid="link-mobile-account"><UserRound size={18}/></Link>
       <Link href="/cart" className="icon-button" aria-label="Shopping bag" data-testid="link-cart"><ShoppingBag size={18}/>{cart.count > 0 && <span className="cart-count">{cart.count}</span>}</Link>
       <Link href="/shop" className="icon-button mobile-menu" aria-label="Browse fragrances" data-testid="link-mobile-shop"><Menu size={19}/></Link>
     </div>
@@ -144,10 +199,435 @@ function AccountControls() {
 
 function Footer() {
   return <footer className="footer"><div className="wrap">
-    <div className="footer-main"><div><Link href="/" className="brand">sillage</Link><p>Independent fragrance, thoughtfully selected. From Aotearoa, for wherever you are.</p></div>
-      <div className="footer-links"><div><span className="eyebrow">Explore</span><Link href="/shop">Fragrance</Link><a href={`${basePath || ''}/#approach`}>Our approach</a></div><div><span className="eyebrow">Help</span><Link href="/cart">Your bag</Link><Show when="signed-in"><Link href="/account">Account</Link><Link href="/admin">Store admin</Link></Show><Show when="signed-out"><Link href="/sign-in">Sign in</Link></Show></div></div></div>
-    <div className="footer-bottom"><span>© {new Date().getFullYear()} Sillage Fragrance</span><span>Made for the considered everyday · Aotearoa New Zealand</span></div>
+    <div className="footer-main"><div><Link href="/" className="brand"><span>Arvessó</span><span className="brand-descriptor">FRAGRANCES</span></Link><p>Independent fragrance, thoughtfully selected. From Aotearoa, for wherever you are.</p><a className="footer-social" href={STORE_INSTAGRAM} target="_blank" rel="noreferrer">Instagram</a></div>
+      <div className="footer-links"><div><span className="eyebrow">Explore</span><Link href="/shop">Fragrance</Link><a href={`${basePath || ''}/#approach`}>Our approach</a></div><div><span className="eyebrow">Help & information</span><Link href="/contact">Contact</Link><Link href="/shipping">Shipping</Link><Link href="/returns">Returns</Link><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/cart">Your bag</Link><Show when="signed-in"><Link href="/account">Account</Link><AdminStudioLink label="Store admin" testId="link-footer-store-admin"/></Show><Show when="signed-out"><Link href="/sign-in">Sign in</Link></Show></div></div></div>
+    <div className="footer-bottom"><span>© {new Date().getFullYear()} Arvessó Fragrances</span><span>Made for the considered everyday · Aotearoa New Zealand</span></div>
   </div></footer>;
+}
+
+type StoreInfoPageKey = 'contact' | 'shipping' | 'returns' | 'privacy' | 'terms';
+type PolicyInline = string | { label: string; href: string; external?: boolean };
+type PolicyBlock =
+  | { kind: 'p'; parts: PolicyInline[] }
+  | { kind: 'ul' | 'ol'; items: PolicyInline[][] }
+  | { kind: 'lines'; items: { label: string; value: string; href?: string; external?: boolean }[] };
+
+const STORE_EMAIL = 'arvessofragrances@gmail.com';
+const STORE_INSTAGRAM = 'https://www.instagram.com/arvesso_fragrances/?hl=en';
+
+function PolicyInlines({ parts }: { parts: PolicyInline[] }) {
+  return <>{parts.map((part, index) => (
+    typeof part === 'string'
+      ? <span key={index}>{part}</span>
+      : part.external
+        ? <a key={index} href={part.href} target={part.href.startsWith('mailto:') ? undefined : '_blank'} rel={part.href.startsWith('mailto:') ? undefined : 'noreferrer'}>{part.label}</a>
+        : <Link key={index} href={part.href}>{part.label}</Link>
+  ))}</>;
+}
+
+const storeInfoPages: Record<StoreInfoPageKey, {
+  title: string;
+  updated?: string;
+  intro: PolicyInline[][];
+  sections: { title: string; blocks: PolicyBlock[] }[];
+}> = {
+  contact: {
+    title: 'Contact',
+    intro: [['Questions about an order, a return, or a fragrance — email us or send a message on Instagram. Include your order number when you have one.']],
+    sections: [
+      { title: 'Email', blocks: [{ kind: 'lines', items: [{ label: 'Email', value: STORE_EMAIL, href: `mailto:${STORE_EMAIL}` }] }] },
+      { title: 'Instagram', blocks: [{ kind: 'lines', items: [{ label: 'Instagram', value: '@arvesso_fragrances', href: STORE_INSTAGRAM, external: true }] }] },
+    ],
+  },
+  shipping: {
+    title: 'Shipping & delivery',
+    intro: [['We currently accept orders for delivery within New Zealand only.']],
+    sections: [
+      { title: 'Where we deliver', blocks: [{ kind: 'p', parts: ['Orders are accepted for delivery within New Zealand only.'] }] },
+      { title: 'Timing', blocks: [{ kind: 'p', parts: ['Our estimated delivery timeframe is 3–7 business days, subject to the delivery location and circumstances affecting delivery.'] }] },
+      { title: 'Charges', blocks: [{ kind: 'p', parts: ['Delivery within New Zealand is $15. Orders over $100 ship free. The delivery charge is shown at checkout, before you pay.'] }] },
+      { title: 'Your delivery details', blocks: [{ kind: 'p', parts: ['You are responsible for providing an accurate delivery address. If a parcel cannot be delivered because the address is incomplete or incorrect, contact us at ', { label: STORE_EMAIL, href: `mailto:${STORE_EMAIL}`, external: true }, ' with your order number.'] }] },
+      { title: 'Questions', blocks: [{ kind: 'p', parts: ['For anything else about an order in transit, email ', { label: STORE_EMAIL, href: `mailto:${STORE_EMAIL}`, external: true }, ' or message ', { label: '@arvesso_fragrances', href: STORE_INSTAGRAM, external: true }, '.'] }] },
+    ],
+  },
+  returns: {
+    title: 'Returns & refunds',
+    intro: [['We want you to feel confident when ordering from us. If you change your mind, our voluntary returns policy allows eligible unopened products to be returned within 14 days of delivery.'], ['Your rights under New Zealand consumer law remain protected.']],
+    sections: [
+      {
+        title: '14-day change-of-mind returns',
+        blocks: [
+          { kind: 'p', parts: ['You may request a return within 14 calendar days of receiving your order, provided that:'] },
+          { kind: 'ul', items: [
+            ['The product is unopened and unused.'],
+            ['Original seals, packaging and protective wrapping remain intact.'],
+            ['The product is in its original resaleable condition.'],
+            ['You can provide proof of purchase.'],
+            ['The return request is made within 14 calendar days of delivery.'],
+          ] },
+          { kind: 'p', parts: ['For fragrance products, the product must remain unopened, including any original manufacturer seals or cellophane wrapping.'] },
+          { kind: 'p', parts: ['We reserve the right to assess whether a returned item meets these conditions.'] },
+        ],
+      },
+      {
+        title: 'How to request a return',
+        blocks: [
+          { kind: 'p', parts: ['To request a change-of-mind return:'] },
+          { kind: 'ol', items: [
+            ['Contact us at ', { label: STORE_EMAIL, href: `mailto:${STORE_EMAIL}`, external: true }, ' within 14 calendar days of receiving your order.'],
+            ['Include your order number and the product you wish to return.'],
+            ['Wait for return instructions before sending anything back.'],
+            ['Package the product securely and follow the instructions provided.'],
+          ] },
+          { kind: 'p', parts: ['Please do not send products to us without receiving return instructions first.'] },
+        ],
+      },
+      {
+        title: 'Return shipping costs',
+        blocks: [
+          { kind: 'p', parts: ['For approved change-of-mind returns, the customer is responsible for the cost of returning the product unless we agree otherwise.'] },
+        ],
+      },
+      {
+        title: 'Faulty, damaged or incorrect products',
+        blocks: [
+          { kind: 'p', parts: ['If an item arrives damaged, faulty, incorrect or does not meet the guarantees required by New Zealand law, please contact us.'] },
+          { kind: 'p', parts: ['Include:'] },
+          { kind: 'ul', items: [
+            ['Your order number.'],
+            ['A description of the issue.'],
+            ['Photographs where relevant.'],
+          ] },
+          { kind: 'p', parts: ['We will assess the issue and provide an appropriate remedy in accordance with the Consumer Guarantees Act 1993.'] },
+          { kind: 'p', parts: ['Depending on the circumstances and the seriousness of the issue, this may include a repair, replacement or refund.'] },
+          { kind: 'p', parts: ['We will not use this voluntary change-of-mind policy to restrict your statutory consumer rights.'] },
+        ],
+      },
+      {
+        title: 'Refund processing',
+        blocks: [
+          { kind: 'p', parts: ['Once an approved return has been received and assessed, we will contact you about the outcome.'] },
+          { kind: 'p', parts: ['Approved refunds will be made using the original payment method where reasonably possible.'] },
+          { kind: 'p', parts: ['We check return requests every Monday at 8:00am, New Zealand time. After that check, a return takes 7 days.'] },
+          { kind: 'p', parts: ['Your bank or payment provider may take additional time to display the refunded amount.'] },
+        ],
+      },
+      {
+        title: 'Products not eligible for change-of-mind returns',
+        blocks: [
+          { kind: 'p', parts: ['Opened, used, unsealed or damaged products are not eligible for our voluntary change-of-mind returns policy.'] },
+          { kind: 'p', parts: ['This does not exclude remedies that may be available under New Zealand consumer law if a product is faulty, unsafe, misdescribed or otherwise fails to meet applicable consumer guarantees.'] },
+        ],
+      },
+      {
+        title: 'Contact',
+        blocks: [
+          { kind: 'p', parts: ['For returns and refund enquiries:'] },
+          { kind: 'lines', items: [
+            { label: 'Email', value: STORE_EMAIL, href: `mailto:${STORE_EMAIL}` },
+            { label: 'Contact', value: 'Contact page', href: '/contact' },
+            { label: 'Instagram', value: '@arvesso_fragrances', href: STORE_INSTAGRAM, external: true },
+          ] },
+        ],
+      },
+    ],
+  },
+  privacy: {
+    title: 'Privacy',
+    updated: '15 November 2026',
+    intro: [['Your privacy matters to us. This policy explains how Arvessó Fragrances collects, uses, stores and protects personal information when you visit our website or purchase from us.'], ['We handle personal information in accordance with the New Zealand Privacy Act 2020.']],
+    sections: [
+      {
+        title: '1. Information we collect',
+        blocks: [
+          { kind: 'p', parts: ['Depending on how you use our website, we may collect:'] },
+          { kind: 'ul', items: [
+            ['Contact information: your name, email address, phone number and delivery address.'],
+            ['Order information: products purchased, order history, order number and delivery details.'],
+            ['Payment information: payment status and transaction references supplied by our payment provider. We do not intend to store full payment card details on our own systems.'],
+            ['Account information: login details and account preferences, if customer accounts are offered.'],
+            ['Website information: technical information such as browser type, device information, IP address and website usage data, where collected through our website or analytics tools.'],
+            ['Communications: messages and enquiries you send to us.'],
+          ] },
+          { kind: 'p', parts: ['We aim to collect only information reasonably needed for our business purposes.'] },
+        ],
+      },
+      {
+        title: '2. How we use your information',
+        blocks: [
+          { kind: 'p', parts: ['We may use your information to:'] },
+          { kind: 'ul', items: [
+            ['Process and fulfil orders.'],
+            ['Arrange delivery and provide order updates.'],
+            ['Process payments, refunds and payment enquiries.'],
+            ['Respond to customer support requests.'],
+            ['Maintain customer accounts, where available.'],
+            ['Improve our website and shopping experience.'],
+            ['Detect and prevent fraud, misuse and security issues.'],
+            ['Meet legal, accounting and record-keeping obligations.'],
+            ['Send promotional communications where you have agreed to receive them or where otherwise permitted by law.'],
+          ] },
+          { kind: 'p', parts: ['You can opt out of marketing emails using the unsubscribe option or by contacting us.'] },
+        ],
+      },
+      {
+        title: '3. Payment processing',
+        blocks: [
+          { kind: 'p', parts: ['Payments may be processed through third-party payment providers, including PayPal.'] },
+          { kind: 'p', parts: ['When you make a payment, relevant transaction and payment information may be handled by the payment provider under its own privacy policy and terms.'] },
+          { kind: 'p', parts: ['We do not intend to store your full payment card number or security code.'] },
+        ],
+      },
+      {
+        title: '4. When we share information',
+        blocks: [
+          { kind: 'p', parts: ['We do not sell customers’ personal information.'] },
+          { kind: 'p', parts: ['We may share relevant information with service providers where necessary to operate our store, including:'] },
+          { kind: 'ul', items: [
+            ['Payment processors.'],
+            ['Courier and delivery providers.'],
+            ['Website hosting and infrastructure providers.'],
+            ['Customer-support and email service providers.'],
+            ['Website security and analytics providers, if used.'],
+            ['Professional advisers or government authorities where legally required.'],
+          ] },
+          { kind: 'p', parts: ['We only intend to share information for legitimate business purposes and where permitted by applicable privacy law.'] },
+        ],
+      },
+      {
+        title: '5. Overseas service providers',
+        blocks: [{ kind: 'p', parts: ['Some third-party services used to operate an online store may process or store information outside New Zealand. Where personal information is disclosed to an overseas organisation, we will take steps to comply with the applicable requirements of Information Privacy Principle 12 of the Privacy Act 2020.'] }],
+      },
+      {
+        title: '6. Cookies and website analytics',
+        blocks: [
+          { kind: 'p', parts: ['Our website may use cookies or similar technologies to support essential website functions, remember preferences, maintain shopping sessions and understand website performance.'] },
+          { kind: 'p', parts: ['This website does not use advertising or analytics tools. The shopping bag is stored in your browser. Account sign-in is handled by Clerk, which may set cookies required to keep you signed in. PayPal may set cookies when you complete a payment.'] },
+          { kind: 'p', parts: ['You can manage cookies through your browser settings. Disabling certain cookies may affect some website functions.'] },
+        ],
+      },
+      {
+        title: '7. Keeping information secure',
+        blocks: [
+          { kind: 'p', parts: ['We take reasonable steps to protect personal information against loss, unauthorised access, misuse, modification or disclosure.'] },
+          { kind: 'p', parts: ['However, no online system can be guaranteed to be completely secure.'] },
+          { kind: 'p', parts: ['If a privacy breach occurs, we will respond in accordance with our legal obligations, including notifying affected individuals and the Office of the Privacy Commissioner where required.'] },
+        ],
+      },
+      {
+        title: '8. How long we retain information',
+        blocks: [
+          { kind: 'p', parts: ['We retain personal information only for as long as reasonably necessary for the purposes for which it was collected, including order fulfilment, customer support, legal obligations and legitimate business records.'] },
+          { kind: 'p', parts: ['When information is no longer required, we will take reasonable steps to securely delete or de-identify it.'] },
+        ],
+      },
+      {
+        title: '9. Accessing or correcting your information',
+        blocks: [
+          { kind: 'p', parts: ['Under the Privacy Act 2020, you can request access to personal information we hold about you.'] },
+          { kind: 'p', parts: ['You can also ask us to correct information that is inaccurate, incomplete or misleading.'] },
+          { kind: 'p', parts: ['To make a request, email ', { label: STORE_EMAIL, href: `mailto:${STORE_EMAIL}`, external: true }, '. We will respond in accordance with applicable legal timeframes.'] },
+        ],
+      },
+      {
+        title: '10. Children’s privacy',
+        blocks: [
+          { kind: 'p', parts: ['Our website is intended for general retail customers. We do not knowingly seek to collect unnecessary personal information from children.'] },
+          { kind: 'p', parts: ['If you believe a child has provided personal information to us inappropriately, contact us so we can review the matter.'] },
+        ],
+      },
+      {
+        title: '11. Changes to this policy',
+        blocks: [
+          { kind: 'p', parts: ['We may update this Privacy Policy when our business practices, website features or legal requirements change.'] },
+          { kind: 'p', parts: ['The latest version will be published on this page with its updated date.'] },
+        ],
+      },
+      {
+        title: '12. Contact us',
+        blocks: [{ kind: 'lines', items: [
+          { label: 'Business', value: 'Arvessó Fragrances' },
+          { label: 'Email', value: STORE_EMAIL, href: `mailto:${STORE_EMAIL}` },
+          { label: 'Contact', value: 'Contact page', href: '/contact' },
+          { label: 'Instagram', value: '@arvesso_fragrances', href: STORE_INSTAGRAM, external: true },
+        ] }],
+      },
+    ],
+  },
+  terms: {
+    title: 'Terms & conditions',
+    updated: '15 November 2026',
+    intro: [
+      ['Welcome to Arvessó Fragrances.'],
+      ['These Terms & Conditions apply when you access our website or purchase products from us. By placing an order, you agree to these terms, subject to your rights under applicable New Zealand law.'],
+      ['Please read these terms before making a purchase.'],
+    ],
+    sections: [
+      {
+        title: '1. About our business',
+        blocks: [
+          { kind: 'p', parts: ['Arvessó Fragrances operates as an independent online fragrance retailer.'] },
+          { kind: 'p', parts: ['We offer fragrances from a range of established third-party brands.'] },
+          { kind: 'p', parts: ['Unless expressly stated otherwise, we are not the manufacturer of the products listed on our website and are not affiliated with, endorsed by or officially connected to the individual fragrance brands.'] },
+          { kind: 'p', parts: ['All brand names, trademarks and product names belong to their respective owners.'] },
+        ],
+      },
+      {
+        title: '2. Product information',
+        blocks: [
+          { kind: 'p', parts: ['We aim to ensure product descriptions, photographs, sizes, prices and other information are accurate and up to date.'] },
+          { kind: 'p', parts: ['Product packaging, presentation and manufacturer designs may occasionally vary.'] },
+          { kind: 'p', parts: ['Customers should review the product description, size, concentration and other relevant details before purchasing.'] },
+          { kind: 'p', parts: ['If you have a question about a product, please contact us before placing your order.'] },
+        ],
+      },
+      {
+        title: '3. Product authenticity',
+        blocks: [
+          { kind: 'p', parts: ['We intend to offer genuine branded fragrance products sourced through legitimate supply channels.'] },
+          { kind: 'p', parts: ['We do not knowingly offer counterfeit products.'] },
+          { kind: 'p', parts: ['If you have a concern about the authenticity or condition of an item purchased from us, please contact us with your order details so we can investigate.'] },
+        ],
+      },
+      {
+        title: '4. Prices and payment',
+        blocks: [
+          { kind: 'p', parts: ['All prices displayed on our website are shown in New Zealand dollars (NZD).'] },
+          { kind: 'p', parts: ['Applicable delivery charges will be displayed during checkout.'] },
+          { kind: 'p', parts: ['Payment must be completed using the payment methods made available at checkout.'] },
+          { kind: 'p', parts: ['Payments may be processed through third-party providers, including PayPal.'] },
+          { kind: 'p', parts: ['We do not receive or store your full payment card details through our own website checkout unless expressly stated.'] },
+          { kind: 'p', parts: ['We reserve the right to correct genuine pricing or listing errors. If an error affects an order you have placed, we will contact you before taking any further action.'] },
+        ],
+      },
+      {
+        title: '5. Placing an order',
+        blocks: [
+          { kind: 'p', parts: ['When you submit an order, you are making an offer to purchase the selected products.'] },
+          { kind: 'p', parts: ['An order confirmation acknowledges that we have received your order. It does not necessarily mean that the order has been accepted or dispatched.'] },
+          { kind: 'p', parts: ['We may need to contact you if:'] },
+          { kind: 'ul', items: [
+            ['A product is unavailable.'],
+            ['Payment cannot be confirmed.'],
+            ['Delivery information is incomplete.'],
+            ['There is a genuine pricing or listing error.'],
+            ['We identify a suspected fraudulent transaction.'],
+          ] },
+          { kind: 'p', parts: ['If we cannot fulfil an order after payment has been received, we will arrange an appropriate refund.'] },
+        ],
+      },
+      {
+        title: '6. Availability and stock',
+        blocks: [
+          { kind: 'p', parts: ['Product availability may change without notice.'] },
+          { kind: 'p', parts: ['Although we aim to keep our website updated, an item may occasionally become unavailable between the time it is displayed and the time an order is processed.'] },
+          { kind: 'p', parts: ['If an item you have purchased cannot be supplied, we will contact you to discuss an appropriate resolution, including a refund where applicable.'] },
+        ],
+      },
+      {
+        title: '7. Shipping and delivery',
+        blocks: [
+          { kind: 'p', parts: ['We currently intend to accept orders for delivery within New Zealand only.'] },
+          { kind: 'p', parts: ['Our estimated delivery timeframe is 3–7 business days, subject to the delivery location and circumstances affecting delivery.'] },
+          { kind: 'p', parts: ['Delivery within New Zealand is $15. Orders over $100 ship free. The delivery charge is shown at checkout.'] },
+          { kind: 'p', parts: ['Customers are responsible for providing accurate delivery information.'] },
+          { kind: 'p', parts: ['For more information, please refer to our ', { label: 'Shipping & delivery', href: '/shipping' }, ' page.'] },
+        ],
+      },
+      {
+        title: '8. Returns and refunds',
+        blocks: [
+          { kind: 'p', parts: ['Our voluntary change-of-mind policy allows eligible unopened products to be returned within 14 calendar days of delivery.'] },
+          { kind: 'p', parts: ['Products must remain unused, unopened and in their original sealed packaging.'] },
+          { kind: 'p', parts: ['This voluntary policy operates alongside, and does not replace or restrict, your rights under the Consumer Guarantees Act 1993.'] },
+          { kind: 'p', parts: ['For full details, please refer to our ', { label: 'Returns & refunds', href: '/returns' }, ' page.'] },
+        ],
+      },
+      {
+        title: '9. Consumer rights',
+        blocks: [
+          { kind: 'p', parts: ['Nothing in these Terms & Conditions is intended to exclude, restrict or modify any rights or remedies that cannot legally be excluded under New Zealand law.'] },
+          { kind: 'p', parts: ['Where applicable, the Consumer Guarantees Act 1993 and Fair Trading Act 1986 protect customers purchasing from businesses operating in New Zealand.'] },
+        ],
+      },
+      {
+        title: '10. Website use',
+        blocks: [
+          { kind: 'p', parts: ['You agree to use our website lawfully and responsibly.'] },
+          { kind: 'p', parts: ['You must not:'] },
+          { kind: 'ul', items: [
+            ['Attempt to interfere with website security or functionality.'],
+            ['Use the website for fraudulent or unlawful activities.'],
+            ['Attempt to gain unauthorised access to accounts or systems.'],
+            ['Copy or misuse website content, branding or materials without permission.'],
+          ] },
+          { kind: 'p', parts: ['We may restrict access where reasonably necessary to protect our website, customers or business operations.'] },
+        ],
+      },
+      {
+        title: '11. Intellectual property',
+        blocks: [
+          { kind: 'p', parts: ['Website content, including original text, graphics, logos, design elements and other materials, belongs to Arvessó Fragrances or its respective licensors unless otherwise stated.'] },
+          { kind: 'p', parts: ['Third-party product names, brand logos and trademarks remain the property of their respective owners.'] },
+          { kind: 'p', parts: ['Their appearance on our website is for product identification and retail purposes and does not imply an official partnership or endorsement.'] },
+        ],
+      },
+      {
+        title: '12. Limitation of liability',
+        blocks: [
+          { kind: 'p', parts: ['To the extent permitted by New Zealand law, we are not responsible for losses arising from circumstances outside our reasonable control.'] },
+          { kind: 'p', parts: ['Nothing in this section excludes liability or remedies that cannot legally be excluded or limited, including rights under applicable consumer protection laws.'] },
+        ],
+      },
+      {
+        title: '13. Privacy',
+        blocks: [
+          { kind: 'p', parts: ['Your use of our website is also subject to our ', { label: 'Privacy', href: '/privacy' }, ' policy, which explains how we collect, use and protect personal information.'] },
+        ],
+      },
+      {
+        title: '14. Changes to these terms',
+        blocks: [
+          { kind: 'p', parts: ['We may update these Terms & Conditions from time to time to reflect changes to our business, website or legal requirements.'] },
+          { kind: 'p', parts: ['The latest version will be published on this page.'] },
+          { kind: 'p', parts: ['Any changes will not remove rights that have already accrued to customers or override applicable consumer law.'] },
+        ],
+      },
+      {
+        title: '15. Governing law',
+        blocks: [
+          { kind: 'p', parts: ['These Terms & Conditions are governed by the laws of New Zealand.'] },
+          { kind: 'p', parts: ['Any disputes will be dealt with in accordance with applicable New Zealand law.'] },
+        ],
+      },
+      {
+        title: '16. Contact information',
+        blocks: [{ kind: 'lines', items: [
+          { label: 'Business', value: 'Arvessó Fragrances' },
+          { label: 'Email', value: STORE_EMAIL, href: `mailto:${STORE_EMAIL}` },
+          { label: 'Contact', value: 'Contact page', href: '/contact' },
+          { label: 'Instagram', value: '@arvesso_fragrances', href: STORE_INSTAGRAM, external: true },
+        ] }],
+      },
+    ],
+  },
+};
+
+function PolicyBlockView({ block }: { block: PolicyBlock }) {
+  if (block.kind === 'p') return <p><PolicyInlines parts={block.parts}/></p>;
+  if (block.kind === 'lines') {
+    return <div className="policy-contact">{block.items.map((item) => <div key={item.label}><strong>{item.label}</strong>{item.href ? item.external ? <a href={item.href} target="_blank" rel="noreferrer">{item.value}</a> : item.href.startsWith('mailto:') ? <a href={item.href}>{item.value}</a> : <Link href={item.href}>{item.value}</Link> : <span>{item.value}</span>}</div>)}</div>;
+  }
+  const ListTag = block.kind === 'ol' ? 'ol' : 'ul';
+  return <ListTag>{block.items.map((item, index) => <li key={index}><PolicyInlines parts={item}/></li>)}</ListTag>;
+}
+
+function StoreInfoPage({ page }: { page: StoreInfoPageKey }) {
+  const content = storeInfoPages[page];
+  return <main className="wrap policy-page">
+    <div className="page-head"><span className="eyebrow">Arvessó Fragrances{content.updated ? ` · Updated ${content.updated}` : ''}</span><h1>{content.title}</h1>{content.intro.map((parts, index) => <p key={index}><PolicyInlines parts={parts}/></p>)}</div>
+    <div className="policy-content">{content.sections.map((section) => <section className="policy-section" key={section.title}><h2>{section.title}</h2>{section.blocks.map((block, index) => <PolicyBlockView key={index} block={block}/>)}</section>)}</div>
+  </main>;
 }
 
 function Shell({ children, cart }: { children: ReactNode; cart: CartApi }) {
@@ -184,13 +664,13 @@ function HomePage() {
     return marked.length ? marked : data.items;
   }, [data]);
   return <>
-    <section className="hero"><div className="hero-image"/><div className="hero-content"><span className="eyebrow">Independent fragrance · Aotearoa</span><h1>Find the note<br/>that stays.</h1><p>A considered edit of fragrance for the quietly distinctive. Discover a scent that feels like your own.</p><Link className="button" href="/shop">Explore fragrance <ArrowRight size={14}/></Link></div></section>
-    <section className="intro" id="approach"><span className="eyebrow">The Sillage point of view</span><h2>Close to the skin.<br/>Never ordinary.</h2><p>We believe a fragrance should be discovered, not prescribed. Our edit brings together independent perfumery and enduring classics, chosen for character, craft and the way they make you feel.</p></section>
-    <section className="section wrap"><div className="section-top"><div><span className="eyebrow">The collection</span><h2 className="section-heading">Selected for you</h2></div><Link className="text-link eyebrow" href="/shop">View the collection <ArrowRight size={13}/></Link></div>
+    <section className="hero scroll-reveal"><div className="hero-image"/><div className="hero-content"><span className="eyebrow">Independent fragrance · Aotearoa</span><h1>Find the note<br/>that stays.</h1><p>A considered edit of fragrance for the quietly distinctive. Discover a scent that feels like your own.</p><Link className="button" href="/shop">Explore fragrance <ArrowRight size={14}/></Link></div></section>
+    <section className="intro scroll-reveal" id="approach"><span className="eyebrow">The Arvessó point of view</span><h2>Close to the skin.<br/>Never ordinary.</h2><p>We believe a fragrance should be discovered, not prescribed. Our edit brings together independent perfumery and enduring classics, chosen for character, craft and the way they make you feel.</p></section>
+    <section className="section wrap scroll-reveal"><div className="section-top"><div><span className="eyebrow">The collection</span><h2 className="section-heading">Selected for you</h2></div><Link className="text-link eyebrow" href="/shop">View the collection <ArrowRight size={13}/></Link></div>
       {isLoading ? <ProductSkeletons/> : isError ? <QueryError retry={() => void refetch()}/> : featured.length ? <div className="product-grid">{featured.slice(0,4).map((p) => <ProductCard key={p.id} product={p}/>)}</div> : <EmptyCatalog/>}
     </section>
-    <section className="quiet-band"><div className="wrap quiet-band-inner"><div><span className="eyebrow">An invitation to explore</span><h2>Fragrance is personal.<br/>Finding yours can be, too.</h2></div><div><p>Take your time with the notes, the materials and the feeling each fragrance leaves behind. We’re here for the discovery.</p><Link className="button button-outline" href="/shop">Browse all fragrances <ArrowRight size={14}/></Link></div></div></section>
-    <div className="wrap service-strip"><div className="service-item"><Truck size={17}/><b>Thoughtful delivery</b><p>Clear, careful shipping from New Zealand.</p></div><div className="service-item"><ShieldCheck size={17}/><b>Chosen with care</b><p>Real fragrance records and details, always.</p></div><div className="service-item"><CircleHelp size={17}/><b>Here to help</b><p>Guidance for your next considered scent.</p></div></div>
+    <section className="quiet-band scroll-reveal"><div className="wrap quiet-band-inner"><div><span className="eyebrow">An invitation to explore</span><h2>Fragrance is personal.<br/>Finding yours can be, too.</h2></div><div><p>Take your time with the notes, the materials and the feeling each fragrance leaves behind. We’re here for the discovery.</p><Link className="button button-outline" href="/shop">Browse all fragrances <ArrowRight size={14}/></Link></div></div></section>
+    <div className="wrap service-strip scroll-reveal"><div className="service-item"><Truck size={17}/><b>Thoughtful delivery</b><p>Clear, careful shipping from New Zealand.</p></div><div className="service-item"><ShieldCheck size={17}/><b>Chosen with care</b><p>Real fragrance records and details, always.</p></div><div className="service-item"><CircleHelp size={17}/><b>Here to help</b><p>Guidance for your next considered scent.</p></div></div>
   </>;
 }
 
@@ -199,7 +679,7 @@ function ShopPage() {
   const [audience, setAudience] = useState('');
   const [sort, setSort] = useState<'newest'|'price-asc'|'price-desc'|'name'>('newest');
   const { data, isLoading, isError, refetch } = useGetProducts({ q: q || undefined, audience: audience || undefined, sort, page: 1, pageSize: 48 });
-  return <main className="wrap"><div className="page-head"><span className="eyebrow">The Sillage edit</span><h1>Fragrance</h1><p>Explore an evolving collection of distinctive fragrance. Search by name, brand or the notes you love.</p></div>
+  return <main className="wrap"><div className="page-head"><span className="eyebrow">The Arvessó edit</span><h1>Fragrance</h1><p>Explore an evolving collection of distinctive fragrance. Search by name, brand or the notes you love.</p></div>
     <div className="catalog-tools"><label style={{position:'relative',flex:1}}><Search size={15} style={{position:'absolute',left:13,top:14,color:'#77736b'}}/><input className="field" style={{paddingLeft:38}} value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search the collection" aria-label="Search fragrances" data-testid="input-search-products"/></label>
       <select className="select" value={audience} onChange={(e)=>setAudience(e.target.value)} aria-label="Filter by audience" data-testid="select-audience"><option value="">All audiences</option><option value="women">Women</option><option value="men">Men</option><option value="unisex">Unisex</option></select>
       <select className="select" value={sort} onChange={(e)=>setSort(e.target.value as typeof sort)} aria-label="Sort collection" data-testid="select-sort"><option value="newest">Recently added</option><option value="name">Name</option><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option></select>
@@ -230,18 +710,58 @@ function ProductPageView({ cart }: { cart: CartApi }) {
 }
 
 function CartPage({ cart }: {cart:CartApi}) {
+  const paymentConfigQuery=useQuery({queryKey:['paypal-checkout-config'],queryFn:loadPayPalCheckoutConfig});
+  const discountMinor = paymentConfigQuery.data && cart.total > paymentConfigQuery.data.discountThresholdMinor
+    ? Math.round(cart.total * paymentConfigQuery.data.discountPercent / 100)
+    : 0;
+  const shippingMinor = deliveryForSubtotal(paymentConfigQuery.data, cart.total);
   if (!cart.entries.length) return <main className="wrap"><div className="page-head"><span className="eyebrow">Your selection</span><h1>Your bag</h1></div><EmptyCart/></main>;
   return <main className="wrap"><div className="page-head"><span className="eyebrow">Your selection</span><h1>Your bag</h1></div><div className="cart-layout"><div>{cart.entries.map((line)=><div className="cart-line" key={line.variantId}><ProductImage product={line.product}/><div><span className="product-brand">{line.product.brand}</span><h3>{line.product.name}</h3><span className="product-size">{line.variant.size}</span><div className="quantity-control"><button aria-label="Decrease quantity" onClick={()=>cart.quantity(line.variantId,line.quantity-1)} data-testid={`button-decrease-${line.variantId}`}><Minus size={12}/></button><span>{line.quantity}</span><button aria-label="Increase quantity" onClick={()=>cart.quantity(line.variantId,line.quantity+1)} data-testid={`button-increase-${line.variantId}`}><Plus size={12}/></button></div></div><div style={{textAlign:'right'}}><strong style={{fontSize:12}}>{money(line.variant.priceMinor*line.quantity)}</strong><button className="icon-button" aria-label={`Remove ${line.product.name}`} onClick={()=>cart.remove(line.variantId)} data-testid={`button-remove-${line.variantId}`}><Trash2 size={15}/></button></div></div>)}</div>
-    <aside className="summary"><h2>Order summary</h2><div className="summary-row"><span>Subtotal</span><span>{money(cart.total)}</span></div><div className="summary-row"><span>Delivery</span><span>Calculated at checkout</span></div><div className="summary-row" style={{borderTop:'1px solid #d2cdc3',paddingTop:15,fontWeight:600}}><span>Total</span><span>{money(cart.total)}</span></div><Link className="button" href="/checkout">Continue to checkout <ArrowRight size={14}/></Link><Link className="text-link eyebrow" style={{display:'block',textAlign:'center',marginTop:18}} href="/shop">Continue browsing</Link></aside></div></main>;
+    <aside className="summary"><h2>Order summary</h2><div className="summary-row"><span>Subtotal</span><span>{money(cart.total)}</span></div>{discountMinor > 0 && <div className="summary-row"><span>Automatic discount ({paymentConfigQuery.data?.discountPercent}%)</span><span>−{money(discountMinor)}</span></div>}<div className="summary-row"><span>Delivery</span><span>{shippingMinor === undefined ? '—' : shippingMinor === 0 ? 'Free' : money(shippingMinor)}</span></div><div className="summary-row" style={{borderTop:'1px solid #d2cdc3',paddingTop:15,fontWeight:600}}><span>Total</span><span>{shippingMinor === undefined ? money(cart.total-discountMinor) : money(cart.total-discountMinor+shippingMinor)}</span></div>{paymentConfigQuery.data && <p className="product-size">Delivery is {money(paymentConfigQuery.data.shippingMinor)}. Orders over {money(paymentConfigQuery.data.freeShippingThresholdMinor)} ship free.</p>}{paymentConfigQuery.data && <p className="product-size">{paymentConfigQuery.data.discountPercent}% off fragrance subtotal over {money(paymentConfigQuery.data.discountThresholdMinor)}.</p>}<Link className="button" href="/checkout">Continue to checkout <ArrowRight size={14}/></Link><Link className="text-link eyebrow" style={{display:'block',textAlign:'center',marginTop:18}} href="/shop">Continue browsing</Link></aside></div></main>;
 }
 function EmptyCart(){return <div className="empty-state"><div className="empty-mark"><ShoppingBag size={20}/></div><h2>Your bag is at rest</h2><p>There’s nothing here just yet. Take a moment to explore the collection.</p><Link className="button" href="/shop">Explore fragrance</Link></div>;}
 
+async function loadPayPalCheckoutConfig(): Promise<PayPalCheckoutConfig> {
+  const response = await fetch('/api/checkout/config');
+  const payload: unknown = await response.json();
+  if (!response.ok) {
+    const message = typeof payload === 'object' && payload !== null && 'error' in payload && typeof payload.error === 'string'
+      ? payload.error
+      : `Could not load checkout configuration (${response.status}).`;
+    throw new Error(message);
+  }
+  if (
+    typeof payload !== 'object' || payload === null ||
+    !('mode' in payload) || (payload.mode !== 'sandbox' && payload.mode !== 'live') ||
+    !('shippingMinor' in payload) || typeof payload.shippingMinor !== 'number' ||
+    !('freeShippingThresholdMinor' in payload) || typeof payload.freeShippingThresholdMinor !== 'number' ||
+    !('discountThresholdMinor' in payload) || typeof payload.discountThresholdMinor !== 'number' ||
+    !('discountPercent' in payload) || typeof payload.discountPercent !== 'number' ||
+    !('checkoutEnabled' in payload) || typeof payload.checkoutEnabled !== 'boolean'
+  ) {
+    throw new Error('Checkout configuration was not in the expected format.');
+  }
+  return {
+    mode: payload.mode,
+    shippingMinor: payload.shippingMinor,
+    freeShippingThresholdMinor: payload.freeShippingThresholdMinor,
+    discountThresholdMinor: payload.discountThresholdMinor,
+    discountPercent: payload.discountPercent,
+    checkoutEnabled: payload.checkoutEnabled,
+  };
+}
+
 function CheckoutPage({ cart }: {cart:CartApi}) {
-  const [form,setForm] = useState({email:'',recipientName:'',address1:'',address2:'',city:'',region:'',postcode:'',discountCode:''});
+  const [form,setForm] = useState({email:'',recipientName:'',address1:'',address2:'',city:'',region:'',postcode:''});
   const [error,setError]=useState('');
   const mutation=useCreatePayPalOrder();
+  const paymentConfigQuery=useQuery({queryKey:['paypal-checkout-config'],queryFn:loadPayPalCheckoutConfig});
   const change=(key:keyof typeof form,value:string)=>setForm((old)=>({...old,[key]:value}));
   const submit=(event:FormEvent)=>{event.preventDefault();setError('');
+    if (!paymentConfigQuery.data?.checkoutEnabled) {
+      setError('PayPal checkout is not ready. Please try again later.');
+      return;
+    }
     const input:CheckoutInput={...form, requestId:crypto.randomUUID(), lines:cart.entries.map((item)=>({variantId:item.variantId,quantity:item.quantity}))};
     mutation.mutate({data:input},{onSuccess:(order)=>{sessionStorage.setItem('sillage-pending-paypal',JSON.stringify({orderId:order.orderId,paypalOrderId:order.paypalOrderId,cancelToken:order.cancelToken}));window.location.assign(order.approvalUrl);},onError:()=>setError('We couldn’t begin checkout. Please check your details and try again.')});
   };
@@ -249,13 +769,22 @@ function CheckoutPage({ cart }: {cart:CartApi}) {
   const returnedCancelled = search.has('cancel') || search.has('cancelled') || search.get('useraction') === 'cancel';
   if (returnedCancelled) return <main className="wrap"><div className="page-head"><span className="eyebrow">PayPal checkout</span><h1>Checkout cancelled</h1><p>Your approval was cancelled. We’ll release the reserved stock securely.</p></div><PayPalCancellationReturn cart={cart}/></main>;
   if (!cart.entries.length) return <main className="wrap"><div className="page-head"><span className="eyebrow">Checkout</span><h1>Your bag is empty</h1></div><EmptyCart/></main>;
+  const canCheckout = paymentConfigQuery.data?.checkoutEnabled === true;
+  const shippingMinor = deliveryForSubtotal(paymentConfigQuery.data, cart.total);
+  const discountMinor = paymentConfigQuery.data && cart.total > paymentConfigQuery.data.discountThresholdMinor
+    ? Math.round(cart.total * paymentConfigQuery.data.discountPercent / 100)
+    : 0;
   return <main className="wrap"><div className="page-head"><span className="eyebrow">Almost yours</span><h1>Checkout</h1><p>Enter your delivery details to continue to secure PayPal checkout.</p></div>
     <form className="checkout-grid" onSubmit={submit}><div className="checkout-form">
       <section className="form-section"><h2>Contact</h2><div className="form-grid"><label className="wide">Email<input className="field" type="email" required value={form.email} onChange={(e)=>change('email',e.target.value)} data-testid="input-checkout-email"/></label><label className="wide">Recipient name<input className="field" required value={form.recipientName} onChange={(e)=>change('recipientName',e.target.value)} data-testid="input-recipient-name"/></label></div></section>
-      <section className="form-section"><h2>Delivery address</h2><div className="form-grid"><label className="wide">Address<input className="field" required value={form.address1} onChange={(e)=>change('address1',e.target.value)} data-testid="input-address1"/></label><label className="wide">Apartment, suite, etc. <span style={{textTransform:'none'}}>(optional)</span><input className="field" value={form.address2} onChange={(e)=>change('address2',e.target.value)} data-testid="input-address2"/></label><label>City<input className="field" required value={form.city} onChange={(e)=>change('city',e.target.value)} data-testid="input-city"/></label><label>Region<input className="field" value={form.region} onChange={(e)=>change('region',e.target.value)} data-testid="input-region"/></label><label>Postcode<input className="field" required value={form.postcode} onChange={(e)=>change('postcode',e.target.value)} data-testid="input-postcode"/></label><label>Discount code<input className="field" value={form.discountCode} onChange={(e)=>change('discountCode',e.target.value)} data-testid="input-discount"/></label></div></section>
-      {error && <div className="notice error" role="alert">{error}</div>}<div className="sandbox-note"><ShieldCheck size={16}/><span><strong>PayPal sandbox checkout.</strong> This store is configured for sandbox transactions; no live payment credentials are used.</span></div>
-      <button className="button" type="submit" disabled={mutation.isPending} data-testid="button-paypal-checkout">{mutation.isPending?<><LoaderCircle size={15}/> Preparing checkout</>:<>Continue with PayPal <ArrowRight size={14}/></>}</button>
-    </div><aside className="summary"><h2>Your order</h2>{cart.entries.map((line)=><div className="summary-row" key={line.variantId}><span>{line.product.name} · {line.variant.size} × {line.quantity}</span><span>{money(line.variant.priceMinor*line.quantity)}</span></div>)}<div className="summary-row" style={{borderTop:'1px solid #d2cdc3',paddingTop:15,fontWeight:600}}><span>Total</span><span>{money(cart.total)}</span></div><p style={{fontSize:10,lineHeight:1.6,color:'#706d65'}}>Final prices are confirmed by the store at checkout.</p></aside></form>
+      <section className="form-section"><h2>Delivery address</h2><div className="form-grid"><label className="wide">Address<input className="field" required value={form.address1} onChange={(e)=>change('address1',e.target.value)} data-testid="input-address1"/></label><label className="wide">Apartment, suite, etc. <span style={{textTransform:'none'}}>(optional)</span><input className="field" value={form.address2} onChange={(e)=>change('address2',e.target.value)} data-testid="input-address2"/></label><label>City<input className="field" required value={form.city} onChange={(e)=>change('city',e.target.value)} data-testid="input-city"/></label><label>Region<input className="field" value={form.region} onChange={(e)=>change('region',e.target.value)} data-testid="input-region"/></label><label>Postcode<input className="field" required value={form.postcode} onChange={(e)=>change('postcode',e.target.value)} data-testid="input-postcode"/></label></div></section>
+      <div className="notice" role="note">Automatic offer: {paymentConfigQuery.data?.discountPercent ?? 10}% off fragrance subtotals over {money(paymentConfigQuery.data?.discountThresholdMinor ?? 10000)}, before shipping.</div>
+      {error && <div className="notice error" role="alert">{error}</div>}
+      {paymentConfigQuery.isError && <div className="notice error" role="alert">{paymentConfigQuery.error.message}</div>}
+      {!paymentConfigQuery.isError && paymentConfigQuery.data && !canCheckout && <div className="notice" role="status">{paymentConfigQuery.data.mode === 'live' ? 'Live checkout is disabled until the PayPal account, public HTTPS domain, shipping settings, and final store policies are ready.' : 'PayPal sandbox credentials are not configured yet.'}</div>}
+      {paymentConfigQuery.data && <div className="sandbox-note"><ShieldCheck size={16}/><span><strong>{paymentConfigQuery.data.mode === 'live' ? 'PayPal live payments.' : 'PayPal sandbox checkout.'}</strong> {paymentConfigQuery.data.mode === 'live' ? 'Approved payments will be charged to the customer’s selected payment method.' : 'Sandbox transactions do not charge real money.'}</span></div>}
+      <button className="button" type="submit" disabled={mutation.isPending||paymentConfigQuery.isLoading||!canCheckout} data-testid="button-paypal-checkout">{mutation.isPending?<><LoaderCircle size={15}/> Preparing checkout</>:<>Continue with PayPal <ArrowRight size={14}/></>}</button>
+    </div><aside className="summary"><h2>Your order</h2>{cart.entries.map((line)=><div className="summary-row" key={line.variantId}><span>{line.product.name} · {line.variant.size} × {line.quantity}</span><span>{money(line.variant.priceMinor*line.quantity)}</span></div>)}<div className="summary-row"><span>Subtotal</span><span>{money(cart.total)}</span></div>{discountMinor > 0 && <div className="summary-row"><span>Automatic discount ({paymentConfigQuery.data?.discountPercent}%)</span><span>−{money(discountMinor)}</span></div>}<div className="summary-row"><span>Shipping</span><span>{shippingMinor === undefined ? '—' : money(shippingMinor)}</span></div><div className="summary-row" style={{borderTop:'1px solid #d2cdc3',paddingTop:15,fontWeight:600}}><span>Total</span><span>{shippingMinor === undefined ? '—' : money(cart.total-discountMinor+shippingMinor)}</span></div><p style={{fontSize:10,lineHeight:1.6,color:'#706d65'}}>Final prices are confirmed by the store at checkout.</p></aside></form>
   </main>;
 }
 
@@ -271,7 +800,7 @@ function ConfirmationPage({cart}:{cart:CartApi}) {
   const [captureError,setCaptureError]=useState('');
   useEffect(()=>{
     if(returnedCancelled || !token || !pending || capture.isPending || confirmed) return;
-    capture.mutate({data:{orderId:pending.orderId,paypalOrderId:token}},{onSuccess:(order)=>{setConfirmed(order);sessionStorage.removeItem('sillage-pending-paypal');cart.clear();queryClient.invalidateQueries({queryKey:getGetAdminOrdersQueryKey()});},onError:()=>setCaptureError('PayPal returned to Sillage, but we could not confirm the capture. Please contact us before trying to pay again.')});
+    capture.mutate({data:{orderId:pending.orderId,paypalOrderId:token}},{onSuccess:(order)=>{setConfirmed(order);sessionStorage.removeItem('sillage-pending-paypal');cart.clear();queryClient.invalidateQueries({queryKey:getGetAdminOrdersQueryKey()});},onError:()=>setCaptureError('PayPal returned to Arvessó Fragrances, but we could not confirm the capture. Please contact us before trying to pay again.')});
   },[token,pending,returnedCancelled]);
   const openId=confirmed?.orderNumber || confirmed?.id?.toString() || id;
   if (returnedCancelled) return <main className="wrap"><div className="page-head"><span className="eyebrow">PayPal checkout</span><h1>Checkout cancelled</h1><p>Your approval was cancelled. We’ll release the reserved stock securely.</p></div><PayPalCancellationReturn cart={cart}/></main>;
@@ -323,22 +852,132 @@ function SignUpPage() {
   return <div className="auth-clerk"><SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`}/></div>;
 }
 function HomeRedirect() {
-  return <><Show when="signed-in"><Redirect to="/account"/></Show><Show when="signed-out"><HomePage/></Show></>;
+  return <HomePage/>;
 }
 function AccountPage() {
   const { user, isLoaded } = useUser();
+  const isAdmin = useAdminAccess();
   const { signOut } = useClerk();
-  return <main className="wrap"><div className="page-head"><span className="eyebrow">Your Sillage account</span><h1>A little closer.</h1><p>Manage your account access and return to the collection.</p></div>
-    <Show when="signed-in">{isLoaded && user ? <section className="auth-card" style={{marginBottom:80}}><span className="eyebrow">Signed in</span><h2 className="serif" style={{fontSize:30,margin:'12px 0'}}>{user.fullName || user.primaryEmailAddress?.emailAddress || 'Sillage customer'}</h2><p>{user.primaryEmailAddress?.emailAddress}</p><div className="admin-actions"><Link href="/shop" className="button">Explore fragrance</Link><button className="button button-outline" onClick={()=>void signOut({redirectUrl:basePath||'/'})} data-testid="button-account-sign-out">Sign out</button></div></section>:<div className="skeleton" style={{height:170,marginBottom:80}}/>}</Show>
-    <Show when="signed-out"><Redirect to="/"/></Show>
+  const { data: orders, isLoading: ordersLoading, isError: ordersError, refetch } = useQuery({
+    queryKey: ['account', 'orders'],
+    enabled: isLoaded && Boolean(user),
+    queryFn: loadAccountOrders,
+  });
+
+  if (!isLoaded) {
+    return <main className="wrap account-page"><div className="skeleton account-loading"/></main>;
+  }
+
+  if (!user) {
+    return <main className="wrap account-page">
+      <div className="account-heading"><span className="eyebrow">Your Arvessó account</span><h1>A more personal fragrance journey.</h1><p>Keep your details close, revisit your orders, and return to scents you love.</p></div>
+      <section className="account-welcome">
+        <div className="account-welcome-mark"><UserRound size={25}/></div>
+        <div><span className="eyebrow">A considered experience</span><h2>Make it yours.</h2><p>Sign in to manage your details and see your Arvessó orders in one place.</p></div>
+        <div className="account-actions"><Link className="button" href="/sign-in">Sign in <ArrowRight size={14}/></Link><Link className="button button-outline" href="/sign-up">Create an account</Link></div>
+      </section>
+      <div className="account-feature-grid">
+        <AccountFeature icon={<UserRound size={18}/>} title="Your details" description="Keep your profile and contact information up to date."/>
+        <AccountFeature icon={<PackageCheck size={18}/>} title="Order history" description="Review your recent fragrance orders and their status."/>
+        <AccountFeature icon={<KeyRound size={18}/>} title="Account security" description="Manage your sign-in methods and security settings."/>
+      </div>
+      <div className="account-help"><span>New to Arvessó?</span><Link href="/shop">Explore the fragrance collection <ArrowRight size={13}/></Link></div>
+    </main>;
+  }
+
+  const email = user.primaryEmailAddress?.emailAddress;
+  const joined = user.createdAt
+    ? new Intl.DateTimeFormat('en-NZ', { month: 'long', year: 'numeric' }).format(user.createdAt)
+    : null;
+
+  return <main className="wrap account-page">
+    <div className="account-heading"><span className="eyebrow">Your Arvessó account</span><h1>Your space.</h1><p>Your profile, orders and account settings, all together.</p></div>
+    <div className="account-layout">
+      <aside className="account-sidebar">
+        <span className="eyebrow">My account</span>
+        {isAdmin && <Link className="account-nav-link" href="/admin" data-testid="link-account-store-admin"><Package size={15}/> Store studio</Link>}
+        <a className="account-nav-link active" href="#account-overview"><UserRound size={15}/> Overview</a>
+        <Link className="account-nav-link" href="/account/settings"><KeyRound size={15}/> Profile & security</Link>
+        <a className="account-nav-link" href="#account-orders"><PackageCheck size={15}/> My orders</a>
+        <button className="account-nav-link account-nav-button" type="button" onClick={() => void signOut({ redirectUrl: basePath || '/' })}><LogOut size={15}/> Sign out</button>
+        <div className="account-sidebar-note">Need a hand? We’re here to help with your fragrance journey.</div>
+      </aside>
+      <div className="account-content" id="account-overview">
+        <section className="account-profile-card">
+          <div className="account-avatar">{user.imageUrl ? <img src={user.imageUrl} alt=""/> : <span>{user.firstName?.slice(0, 1) || email?.slice(0, 1) || 'A'}</span>}</div>
+          <div className="account-profile-copy"><span className="eyebrow">Welcome back</span><h2>{user.fullName || 'Arvessó customer'}</h2><p>{email || 'Add an email address in profile settings'}</p></div>
+          {joined && <span className="account-member-since">Member since {joined}</span>}
+        </section>
+
+        <section className="account-section">
+          <div className="account-section-heading"><div><span className="eyebrow">Your details</span><h2>Profile & security</h2></div><Link className="text-link eyebrow" href="/account/settings">Manage details <ArrowRight size={13}/></Link></div>
+          <div className="account-detail-grid">
+            <AccountDetail label="Email address" value={email || 'Not added'} verified={user.primaryEmailAddress?.verification?.status === 'verified'}/>
+            <AccountDetail label="Name" value={user.fullName || 'Add your name'} />
+            <AccountDetail label="Username" value={user.username || 'Not set'} />
+            <AccountDetail label="Phone" value={user.primaryPhoneNumber?.phoneNumber || 'Not added'} />
+          </div>
+          <Link className="account-settings-link" href="/account/settings"><KeyRound size={17}/><span><strong>Sign-in & security settings</strong><small>Update your profile, password and sign-in methods securely with Clerk.</small></span><ArrowRight size={15}/></Link>
+        </section>
+
+        <section className="account-section" id="account-orders">
+          <div className="account-section-heading"><div><span className="eyebrow">Your purchases</span><h2>Order history</h2></div><Link className="text-link eyebrow" href="/shop">Explore fragrance <ArrowRight size={13}/></Link></div>
+          {ordersLoading ? <div className="skeleton account-orders-loading"/> : ordersError ? <div className="notice error">We couldn’t load your orders. <button className="text-link" type="button" onClick={() => void refetch()}>Try again</button></div> : orders?.length ? <div className="account-order-list">{orders.map((order) => <article className="account-order" key={order.orderNumber}><div><span className="eyebrow">{order.orderNumber}</span><p>{new Intl.DateTimeFormat('en-NZ', { dateStyle: 'medium' }).format(new Date(order.createdAt))}</p></div><span className={`account-order-status status-${order.status}`}>{order.status}</span><strong>{money(order.totalMinor, order.currency)}</strong></article>)}</div> : <div className="account-empty-orders"><Package size={20}/><div><strong>No orders just yet</strong><p>Your completed fragrance orders will appear here.</p></div><Link className="button button-outline button-small" href="/shop">Browse fragrances</Link></div>}
+        </section>
+      </div>
+    </div>
   </main>;
+}
+
+type AccountOrder = {
+  orderNumber: string;
+  status: string;
+  totalMinor: number;
+  currency: string;
+  createdAt: string;
+  paidAt: string | null;
+};
+
+async function loadAccountOrders(): Promise<AccountOrder[]> {
+  const response = await fetch('/api/account/orders');
+  if (!response.ok) {
+    throw new Error(`Could not load orders (${response.status}).`);
+  }
+  const payload: unknown = await response.json();
+  if (!Array.isArray(payload) || !payload.every((order) =>
+    typeof order === 'object' && order !== null &&
+    'orderNumber' in order && typeof order.orderNumber === 'string' &&
+    'status' in order && typeof order.status === 'string' &&
+    'totalMinor' in order && typeof order.totalMinor === 'number' &&
+    'currency' in order && typeof order.currency === 'string' &&
+    'createdAt' in order && typeof order.createdAt === 'string' &&
+    'paidAt' in order && (typeof order.paidAt === 'string' || order.paidAt === null)
+  )) {
+    throw new Error('The orders response was not in the expected format.');
+  }
+  return payload;
+}
+
+function AccountFeature({icon,title,description}:{icon:ReactNode;title:string;description:string}) {
+  return <article className="account-feature"><span className="account-feature-icon">{icon}</span><h2>{title}</h2><p>{description}</p></article>;
+}
+
+function AccountDetail({label,value,verified}:{label:string;value:string;verified?:boolean}) {
+  return <div className="account-detail"><span>{label}</span><strong>{value}</strong>{verified && <small><Check size={12}/> Verified</small>}</div>;
+}
+
+function AccountSettingsPage() {
+  const { isLoaded, user } = useUser();
+  if (!isLoaded) return <main className="wrap account-page"><div className="skeleton account-loading"/></main>;
+  if (!user) return <main className="wrap account-page"><div className="account-heading"><span className="eyebrow">Account settings</span><h1>Sign in to continue.</h1><p>Your profile and security settings are private to your account.</p><Link className="button" href="/sign-in">Sign in <ArrowRight size={14}/></Link></div></main>;
+  return <main className="wrap account-settings-page"><div className="account-settings-heading"><Link className="text-link eyebrow" href="/account"><ArrowLeft size={13}/> Back to your account</Link><h1>Profile & security</h1></div><UserProfile routing="hash"/></main>;
 }
 
 const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders']];
 function AdminLayout({children}:{children:ReactNode}) {
   const [path]=useLocation();
   const {data:health,isLoading}=useHealthCheck({query:{queryKey:getHealthCheckQueryKey(),retry:1}});
-  return <div className="admin-shell"><aside className="admin-side"><span className="eyebrow">Sillage · Studio</span><nav className="admin-nav">{adminRoutes.map(([href,label])=><Link key={href} href={href} className={path===href?'active':''} data-testid={`link-admin-${label.toLowerCase()}`}>{label}<ArrowRight size={13}/></Link>)}</nav><div style={{marginTop:35,fontSize:10,color:'#77736b'}}>{isLoading?'Checking service…':health?.status==='ok'?'Store service operational':health?.status?`Service: ${health.status}`:'Service status unavailable'}</div></aside><section className="admin-main">{children}</section></div>;
+  return <div className="admin-shell"><aside className="admin-side"><span className="eyebrow">Arvessó · Studio</span><nav className="admin-nav">{adminRoutes.map(([href,label])=><Link key={href} href={href} className={path===href?'active':''} data-testid={`link-admin-${label.toLowerCase()}`}>{label}<ArrowRight size={13}/></Link>)}</nav><div style={{marginTop:35,fontSize:10,color:'#77736b'}}>{isLoading?'Checking service…':health?.status==='ok'?'Store service operational':health?.status?`Service: ${health.status}`:'Service status unavailable'}</div></aside><section className="admin-main">{children}</section></div>;
 }
 function AdminError({error}:{error:unknown}){return <div className="notice error"><CircleHelp size={15}/> {error instanceof Error?error.message:'The admin service could not be reached. Check your sign-in and try again.'}</div>;}
 function AdminOverview() {
@@ -354,7 +993,7 @@ function AdminOverview() {
 }
 function Metric({label,value}:{label:string;value:string|number}){return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;}
 function EmptyAdmin({message}:{message:string}){return <div className="notice">{message}</div>;}
-function OrderTable({orders}:{orders:Order[]}){return <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Status</th><th>Total</th></tr></thead><tbody>{orders.map((order)=><tr key={order.id}><td>{order.orderNumber}</td><td>{new Date(order.createdAt).toLocaleDateString('en-NZ')}</td><td>{order.email}</td><td><span className="status-pill">{order.status}</span></td><td>{money(order.totalMinor,order.currency)}</td></tr>)}</tbody></table></div>;}
+function OrderTable({orders}:{orders:Order[]}){return <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Status</th><th>Discount</th><th>Total</th></tr></thead><tbody>{orders.map((order)=><tr key={order.id}><td>{order.orderNumber}</td><td>{new Date(order.createdAt).toLocaleDateString('en-NZ')}</td><td>{order.email}</td><td><span className="status-pill">{order.status}</span></td><td>{order.discountMinor?`−${money(order.discountMinor,order.currency)}`:'—'}</td><td>{money(order.totalMinor,order.currency)}</td></tr>)}</tbody></table></div>;}
 
 function ProductEditor({product,onClose}:{product?:Product;onClose:()=>void}) {
   const qc=useQueryClient();
@@ -385,10 +1024,34 @@ function ProductEditor({product,onClose}:{product?:Product;onClose:()=>void}) {
 function AdminProducts() {
   const {data:products,isLoading,isError,error,refetch}=useGetAdminProducts({query:{queryKey:getGetAdminProductsQueryKey()}});
   const [editing,setEditing]=useState<Product|null|false>(false);
+  const [deletingId,setDeletingId]=useState<number|null>(null);
+  const [deleteError,setDeleteError]=useState('');
   const update=useUpdateProduct(); const qc=useQueryClient();
+  const remove=async (product:Product)=>{
+    if(!window.confirm(`Delete ${product.name}? It will leave the shop and the studio. Past orders keep their own record.`)) return;
+    setDeleteError('');
+    setDeletingId(product.id);
+    try {
+      const response=await fetch(`/api/admin/products/${product.id}`,{method:'DELETE',credentials:'include'});
+      if(!response.ok){
+        const body:unknown=await response.json().catch(()=>null);
+        const message=body && typeof body==='object' && 'error' in body && typeof body.error==='string' ? body.error : 'Unable to delete this fragrance.';
+        throw new Error(message);
+      }
+      await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});
+      await qc.invalidateQueries({queryKey:getGetProductsQueryKey()});
+      await qc.invalidateQueries({queryKey:getGetAdminDashboardQueryKey()});
+      setEditing((current)=>current && current.id===product.id ? false : current);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Unable to delete this fragrance.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
   return <AdminLayout><div className="admin-top"><div><span className="eyebrow">Catalogue management</span><h1>Products</h1></div><button className="button button-small" onClick={()=>setEditing(null)} data-testid="button-new-product"><Plus size={14}/> Add fragrance</button></div>
+    {deleteError&&<div className="notice error">{deleteError}</div>}
     {editing!==false&&<ProductEditor product={editing||undefined} onClose={()=>setEditing(false)}/>}
-    {isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:products?.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Fragrance</th><th>Variants</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead><tbody>{products.map(p=><tr key={p.id}><td><strong>{p.name}</strong><div className="product-size">{p.brand}</div></td><td>{p.variants.length}</td><td>{p.variants.reduce((sum,v)=>sum+v.stock,0)}</td><td><span className="status-pill">{p.status}</span></td><td><div className="admin-actions"><button className="button button-outline button-small" onClick={()=>setEditing(p)} data-testid={`button-edit-product-${p.id}`}>Edit</button><button className="button button-outline button-small" disabled={update.isPending} onClick={()=>update.mutate({id:p.id,data:{status:p.status==='published'?'draft':'published'}},{onSuccess:()=>{void qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});void qc.invalidateQueries({queryKey:getGetProductsQueryKey()});}})} data-testid={`button-toggle-publish-${p.id}`}>{p.status==='published'?'Unpublish':'Publish'}</button></div></td></tr>)}</tbody></table></div>:<EmptyCatalog admin/>}
+    {isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:products?.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Fragrance</th><th>Variants</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead><tbody>{products.map(p=><tr key={p.id}><td><strong>{p.name}</strong><div className="product-size">{p.brand}</div></td><td>{p.variants.length}</td><td>{p.variants.reduce((sum,v)=>sum+v.stock,0)}</td><td><span className="status-pill">{p.status}</span></td><td><div className="admin-actions"><button className="button button-outline button-small" onClick={()=>setEditing(p)} data-testid={`button-edit-product-${p.id}`}>Edit</button><button className="button button-outline button-small" disabled={update.isPending} onClick={()=>update.mutate({id:p.id,data:{status:p.status==='published'?'draft':'published'}},{onSuccess:()=>{void qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});void qc.invalidateQueries({queryKey:getGetProductsQueryKey()});}})} data-testid={`button-toggle-publish-${p.id}`}>{p.status==='published'?'Unpublish':'Publish'}</button><button className="button button-outline button-small" disabled={deletingId===p.id} onClick={()=>void remove(p)} data-testid={`button-delete-product-${p.id}`}>{deletingId===p.id?'Deleting…':'Delete'}</button></div></td></tr>)}</tbody></table></div>:<EmptyCatalog admin/>}
   </AdminLayout>;
 }
 
@@ -411,7 +1074,12 @@ function Router({cart}:{cart:CartApi}) {
     <Route path="/product/:slug"><ProductPageView cart={cart}/></Route>
     <Route path="/cart"><CartPage cart={cart}/></Route><Route path="/checkout"><CheckoutPage cart={cart}/></Route>
     <Route path="/order-confirmation/:id"><ConfirmationPage cart={cart}/></Route>
-    <Route path="/account"><AccountPage/></Route>
+    <Route path="/contact"><StoreInfoPage page="contact"/></Route>
+    <Route path="/shipping"><StoreInfoPage page="shipping"/></Route>
+    <Route path="/returns"><StoreInfoPage page="returns"/></Route>
+    <Route path="/privacy"><StoreInfoPage page="privacy"/></Route>
+    <Route path="/terms"><StoreInfoPage page="terms"/></Route>
+    <Route path="/account/settings"><AccountSettingsPage/></Route><Route path="/account"><AccountPage/></Route>
     <Route path="/sign-in/*?" component={SignInPage}/><Route path="/sign-up/*?" component={SignUpPage}/>
     <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route>
     <Route><main className="wrap" style={{padding:'100px 0'}}><span className="eyebrow">404 · Not found</span><h1 className="section-heading">This page has drifted.</h1><Link className="button" href="/">Return home</Link></main></Route>
@@ -440,8 +1108,8 @@ function ClerkProviderWithRoutes({cart}:{cart:CartApi}) {
     signInUrl={`${basePath}/sign-in`}
     signUpUrl={`${basePath}/sign-up`}
     localization={{
-      signIn:{start:{title:'Welcome back',subtitle:'Sign in to return to your Sillage account'}},
-      signUp:{start:{title:'Create your Sillage account',subtitle:'A considered account for your fragrance journey'}},
+      signIn:{start:{title:'Welcome back',subtitle:'Sign in to return to your Arvessó account'}},
+      signUp:{start:{title:'Create your Arvessó account',subtitle:'A considered account for your fragrance journey'}},
     }}
     routerPush={(to)=>setLocation(stripBase(to))}
     routerReplace={(to)=>setLocation(stripBase(to),{replace:true})}
@@ -452,6 +1120,47 @@ function ClerkProviderWithRoutes({cart}:{cart:CartApi}) {
 }
 function App() {
   const cart=useCart();
+  useEffect(() => {
+    const revealSelector = '.scroll-reveal:not(.is-visible)';
+    const elements = document.querySelectorAll<HTMLElement>('.scroll-reveal');
+    const showAll = () => elements.forEach((element) => element.classList.add('is-visible'));
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('IntersectionObserver' in window)) {
+      showAll();
+      return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -36px 0px' });
+
+    const observe = (element: HTMLElement) => {
+      if (element.dataset.revealObserved) return;
+      element.dataset.revealObserved = 'true';
+      observer.observe(element);
+    };
+    const scan = (node: Node) => {
+      if (!(node instanceof HTMLElement)) return;
+      if (node.matches(revealSelector)) observe(node);
+      node.querySelectorAll<HTMLElement>(revealSelector).forEach(observe);
+    };
+
+    scan(document.documentElement);
+    const mutations = new MutationObserver((records) => {
+      records.forEach((record) => record.addedNodes.forEach(scan));
+    });
+    mutations.observe(document.body, { childList: true, subtree: true });
+
+    return () => {
+      observer.disconnect();
+      mutations.disconnect();
+    };
+  }, []);
   return <QueryClientProvider client={queryClient}><TooltipProvider><WouterRouter base={basePath}><ClerkProviderWithRoutes cart={cart}/></WouterRouter><Toaster/></TooltipProvider></QueryClientProvider>;
 }
 export default App;

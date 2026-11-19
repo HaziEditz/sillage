@@ -198,6 +198,7 @@ export interface Order {
   orderNumber: string;
   email: string;
   status: OrderStatus;
+  discountMinor: number;
   totalMinor: number;
   currency: string;
   /** @nullable */
