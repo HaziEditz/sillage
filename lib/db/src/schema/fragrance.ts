@@ -81,6 +81,7 @@ export const ordersTable = pgTable(
     postcode: text("postcode").notNull(),
     subtotalMinor: integer("subtotal_minor").notNull(),
     discountMinor: integer("discount_minor").notNull().default(0),
+    discountCode: text("discount_code"),
     shippingMinor: integer("shipping_minor").notNull().default(0),
     totalMinor: integer("total_minor").notNull(),
     currency: text("currency").notNull().default("NZD"),
@@ -125,6 +126,26 @@ export const orderItemsTable = pgTable(
     unitCostMinor: integer("unit_cost_minor"),
   },
   (table) => [index("fragrance_order_items_order_idx").on(table.orderId)],
+);
+
+export const discountCodesTable = pgTable(
+  "fragrance_discount_codes",
+  {
+    id: serial("id").primaryKey(),
+    code: text("code").notNull(),
+    label: text("label").notNull().default(""),
+    type: text("type").notNull(),
+    percent: integer("percent"),
+    amountMinor: integer("amount_minor"),
+    minSubtotalMinor: integer("min_subtotal_minor").notNull().default(0),
+    usageLimit: integer("usage_limit"),
+    usedCount: integer("used_count").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [uniqueIndex("fragrance_discount_codes_code_idx").on(table.code)],
 );
 
 export const inventoryMovementsTable = pgTable(

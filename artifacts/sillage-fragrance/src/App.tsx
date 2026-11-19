@@ -751,18 +751,54 @@ async function loadPayPalCheckoutConfig(): Promise<PayPalCheckoutConfig> {
   };
 }
 
+type CheckoutQuote = {
+  subtotalMinor: number;
+  automaticDiscountMinor: number;
+  codeDiscountMinor: number;
+  shippingMinor: number;
+  totalMinor: number;
+  freeShipping: boolean;
+  discountCode: string | null;
+  discountSummary: string | null;
+};
+
 function CheckoutPage({ cart }: {cart:CartApi}) {
   const [form,setForm] = useState({email:'',recipientName:'',address1:'',address2:'',city:'',region:'',postcode:''});
   const [error,setError]=useState('');
+  const [codeInput,setCodeInput]=useState('');
+  const [quote,setQuote]=useState<CheckoutQuote|null>(null);
+  const [codeError,setCodeError]=useState('');
+  const [codeNote,setCodeNote]=useState('');
+  const [applyingCode,setApplyingCode]=useState(false);
   const mutation=useCreatePayPalOrder();
   const paymentConfigQuery=useQuery({queryKey:['paypal-checkout-config'],queryFn:loadPayPalCheckoutConfig});
+  useEffect(() => { setQuote(null); setCodeNote(''); setCodeError(''); }, [cart.total, cart.count]);
   const change=(key:keyof typeof form,value:string)=>setForm((old)=>({...old,[key]:value}));
+  const applyCode=async()=>{
+    setCodeError(''); setCodeNote(''); setApplyingCode(true);
+    try {
+      const response = await fetch('/api/checkout/quote', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ discountCode: codeInput, lines: cart.entries.map((item)=>({ variantId: item.variantId, quantity: item.quantity })) }) });
+      const body: unknown = await response.json().catch(()=>null);
+      if (!response.ok) {
+        const message = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'That code could not be applied.';
+        throw new Error(message);
+      }
+      setQuote(body as CheckoutQuote);
+      const applied = body as CheckoutQuote;
+      setCodeNote(applied.discountCode ? `${applied.discountCode} applied. ${applied.discountSummary}.` : 'Code applied.');
+    } catch (err) {
+      setQuote(null);
+      setCodeError(err instanceof Error ? err.message : 'That code could not be applied.');
+    } finally {
+      setApplyingCode(false);
+    }
+  };
   const submit=(event:FormEvent)=>{event.preventDefault();setError('');
     if (!paymentConfigQuery.data?.checkoutEnabled) {
       setError('PayPal checkout is not ready. Please try again later.');
       return;
     }
-    const input:CheckoutInput={...form, requestId:crypto.randomUUID(), lines:cart.entries.map((item)=>({variantId:item.variantId,quantity:item.quantity}))};
+    const input:CheckoutInput={...form, requestId:crypto.randomUUID(), discountCode: quote?.discountCode ?? null, lines:cart.entries.map((item)=>({variantId:item.variantId,quantity:item.quantity}))};
     mutation.mutate({data:input},{onSuccess:(order)=>{sessionStorage.setItem('sillage-pending-paypal',JSON.stringify({orderId:order.orderId,paypalOrderId:order.paypalOrderId,cancelToken:order.cancelToken}));window.location.assign(order.approvalUrl);},onError:()=>setError('We couldn’t begin checkout. Please check your details and try again.')});
   };
   const search = new URLSearchParams(window.location.search);
@@ -770,21 +806,24 @@ function CheckoutPage({ cart }: {cart:CartApi}) {
   if (returnedCancelled) return <main className="wrap"><div className="page-head"><span className="eyebrow">PayPal checkout</span><h1>Checkout cancelled</h1><p>Your approval was cancelled. We’ll release the reserved stock securely.</p></div><PayPalCancellationReturn cart={cart}/></main>;
   if (!cart.entries.length) return <main className="wrap"><div className="page-head"><span className="eyebrow">Checkout</span><h1>Your bag is empty</h1></div><EmptyCart/></main>;
   const canCheckout = paymentConfigQuery.data?.checkoutEnabled === true;
-  const shippingMinor = deliveryForSubtotal(paymentConfigQuery.data, cart.total);
-  const discountMinor = paymentConfigQuery.data && cart.total > paymentConfigQuery.data.discountThresholdMinor
+  const shippingMinor = quote?.shippingMinor ?? deliveryForSubtotal(paymentConfigQuery.data, cart.total);
+  const discountMinor = quote?.automaticDiscountMinor ?? (paymentConfigQuery.data && cart.total > paymentConfigQuery.data.discountThresholdMinor
     ? Math.round(cart.total * paymentConfigQuery.data.discountPercent / 100)
-    : 0;
+    : 0);
+  const codeDiscountMinor = quote?.codeDiscountMinor ?? 0;
+  const orderTotal = shippingMinor === undefined ? undefined : cart.total - discountMinor - codeDiscountMinor + shippingMinor;
   return <main className="wrap"><div className="page-head"><span className="eyebrow">Almost yours</span><h1>Checkout</h1><p>Enter your delivery details to continue to secure PayPal checkout.</p></div>
     <form className="checkout-grid" onSubmit={submit}><div className="checkout-form">
       <section className="form-section"><h2>Contact</h2><div className="form-grid"><label className="wide">Email<input className="field" type="email" required value={form.email} onChange={(e)=>change('email',e.target.value)} data-testid="input-checkout-email"/></label><label className="wide">Recipient name<input className="field" required value={form.recipientName} onChange={(e)=>change('recipientName',e.target.value)} data-testid="input-recipient-name"/></label></div></section>
       <section className="form-section"><h2>Delivery address</h2><div className="form-grid"><label className="wide">Address<input className="field" required value={form.address1} onChange={(e)=>change('address1',e.target.value)} data-testid="input-address1"/></label><label className="wide">Apartment, suite, etc. <span style={{textTransform:'none'}}>(optional)</span><input className="field" value={form.address2} onChange={(e)=>change('address2',e.target.value)} data-testid="input-address2"/></label><label>City<input className="field" required value={form.city} onChange={(e)=>change('city',e.target.value)} data-testid="input-city"/></label><label>Region<input className="field" value={form.region} onChange={(e)=>change('region',e.target.value)} data-testid="input-region"/></label><label>Postcode<input className="field" required value={form.postcode} onChange={(e)=>change('postcode',e.target.value)} data-testid="input-postcode"/></label></div></section>
-      <div className="notice" role="note">Automatic offer: {paymentConfigQuery.data?.discountPercent ?? 10}% off fragrance subtotals over {money(paymentConfigQuery.data?.discountThresholdMinor ?? 10000)}, before shipping.</div>
+      <section className="form-section"><h2>Discount code</h2><div className="form-grid"><label className="wide">Code<input className="field" value={codeInput} onChange={(e)=>setCodeInput(e.target.value.toUpperCase())} placeholder="Enter a code" autoComplete="off" data-testid="input-discount-code"/></label></div><div className="admin-actions" style={{marginTop:12}}><button type="button" className="button button-outline button-small" disabled={applyingCode || !codeInput.trim()} onClick={()=>void applyCode()} data-testid="button-apply-discount">{applyingCode ? 'Checking…' : 'Apply code'}</button>{quote?.discountCode && <button type="button" className="button button-outline button-small" onClick={()=>{ setQuote(null); setCodeInput(''); setCodeNote(''); setCodeError(''); }}>Remove</button>}</div>{codeNote && <div className="notice" role="status">{codeNote}</div>}{codeError && <div className="notice error" role="alert">{codeError}</div>}</section>
+      <div className="notice" role="note">Automatic offer: {paymentConfigQuery.data?.discountPercent ?? 10}% off fragrance subtotals over {money(paymentConfigQuery.data?.discountThresholdMinor ?? 10000)}, before shipping. A code is added on top, and the fragrance total never goes below zero.</div>
       {error && <div className="notice error" role="alert">{error}</div>}
       {paymentConfigQuery.isError && <div className="notice error" role="alert">{paymentConfigQuery.error.message}</div>}
       {!paymentConfigQuery.isError && paymentConfigQuery.data && !canCheckout && <div className="notice" role="status">{paymentConfigQuery.data.mode === 'live' ? 'Live checkout is disabled until the PayPal account, public HTTPS domain, shipping settings, and final store policies are ready.' : 'PayPal sandbox credentials are not configured yet.'}</div>}
       {paymentConfigQuery.data && <div className="sandbox-note"><ShieldCheck size={16}/><span><strong>{paymentConfigQuery.data.mode === 'live' ? 'PayPal live payments.' : 'PayPal sandbox checkout.'}</strong> {paymentConfigQuery.data.mode === 'live' ? 'Approved payments will be charged to the customer’s selected payment method.' : 'Sandbox transactions do not charge real money.'}</span></div>}
       <button className="button" type="submit" disabled={mutation.isPending||paymentConfigQuery.isLoading||!canCheckout} data-testid="button-paypal-checkout">{mutation.isPending?<><LoaderCircle size={15}/> Preparing checkout</>:<>Continue with PayPal <ArrowRight size={14}/></>}</button>
-    </div><aside className="summary"><h2>Your order</h2>{cart.entries.map((line)=><div className="summary-row" key={line.variantId}><span>{line.product.name} · {line.variant.size} × {line.quantity}</span><span>{money(line.variant.priceMinor*line.quantity)}</span></div>)}<div className="summary-row"><span>Subtotal</span><span>{money(cart.total)}</span></div>{discountMinor > 0 && <div className="summary-row"><span>Automatic discount ({paymentConfigQuery.data?.discountPercent}%)</span><span>−{money(discountMinor)}</span></div>}<div className="summary-row"><span>Shipping</span><span>{shippingMinor === undefined ? '—' : money(shippingMinor)}</span></div><div className="summary-row" style={{borderTop:'1px solid #d2cdc3',paddingTop:15,fontWeight:600}}><span>Total</span><span>{shippingMinor === undefined ? '—' : money(cart.total-discountMinor+shippingMinor)}</span></div><p style={{fontSize:10,lineHeight:1.6,color:'#706d65'}}>Final prices are confirmed by the store at checkout.</p></aside></form>
+    </div><aside className="summary"><h2>Your order</h2>{cart.entries.map((line)=><div className="summary-row" key={line.variantId}><span>{line.product.name} · {line.variant.size} × {line.quantity}</span><span>{money(line.variant.priceMinor*line.quantity)}</span></div>)}<div className="summary-row"><span>Subtotal</span><span>{money(cart.total)}</span></div>{discountMinor > 0 && <div className="summary-row"><span>Automatic discount ({paymentConfigQuery.data?.discountPercent}%)</span><span>−{money(discountMinor)}</span></div>}{codeDiscountMinor > 0 && <div className="summary-row"><span>Code {quote?.discountCode}</span><span>−{money(codeDiscountMinor)}</span></div>}{quote?.freeShipping && <div className="summary-row"><span>Code {quote.discountCode}</span><span>Free delivery</span></div>}<div className="summary-row"><span>Shipping</span><span>{shippingMinor === undefined ? '—' : shippingMinor === 0 ? 'Free' : money(shippingMinor)}</span></div><div className="summary-row" style={{borderTop:'1px solid #d2cdc3',paddingTop:15,fontWeight:600}}><span>Total</span><span>{orderTotal === undefined ? '—' : money(orderTotal)}</span></div><p style={{fontSize:10,lineHeight:1.6,color:'#706d65'}}>Final prices are confirmed by the store at checkout.</p></aside></form>
   </main>;
 }
 
@@ -973,7 +1012,7 @@ function AccountSettingsPage() {
   return <main className="wrap account-settings-page"><div className="account-settings-heading"><Link className="text-link eyebrow" href="/account"><ArrowLeft size={13}/> Back to your account</Link><h1>Profile & security</h1></div><UserProfile routing="hash"/></main>;
 }
 
-const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders']];
+const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders'],['/admin/discounts','Discounts']];
 function AdminLayout({children}:{children:ReactNode}) {
   const [path]=useLocation();
   const {data:health,isLoading}=useHealthCheck({query:{queryKey:getHealthCheckQueryKey(),retry:1}});
@@ -1067,6 +1106,121 @@ function AdminInventory() {
 }
 function AdminOrders(){const {data:orders,isLoading,isError,error,refetch}=useGetAdminOrders({query:{queryKey:getGetAdminOrdersQueryKey()}});return <AdminLayout><div className="admin-top"><div><span className="eyebrow">Fulfilment</span><h1>Orders</h1></div></div>{isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:orders?.length?<OrderTable orders={orders}/>:<EmptyAdmin message="No orders yet. Customer orders will appear here after checkout."/>}</AdminLayout>;}
 
+type StudioDiscount = {
+  id: number;
+  code: string;
+  label: string;
+  type: 'percent' | 'fixed' | 'free_shipping';
+  percent: number | null;
+  amountMinor: number | null;
+  minSubtotalMinor: number;
+  usageLimit: number | null;
+  usedCount: number;
+  active: boolean;
+  summary: string;
+};
+
+function AdminDiscounts() {
+  const [codes, setCodes] = useState<StudioDiscount[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState({ code: '', label: '', type: 'percent', percent: '10', amount: '', minSubtotal: '', usageLimit: '' });
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch('/api/admin/discounts', { credentials: 'include' });
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Discount codes could not be loaded.';
+        throw new Error(message);
+      }
+      setCodes(Array.isArray(body) ? body as StudioDiscount[] : []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Discount codes could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { void load(); }, []);
+  const create = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    const response = await fetch('/api/admin/discounts', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: form.code,
+        label: form.label,
+        type: form.type,
+        percent: form.percent,
+        amount: form.amount,
+        minSubtotal: form.minSubtotal,
+        usageLimit: form.usageLimit,
+        active: true,
+      }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not create this code.';
+      setError(message);
+      return;
+    }
+    setForm({ code: '', label: '', type: 'percent', percent: '10', amount: '', minSubtotal: '', usageLimit: '' });
+    await load();
+  };
+  const toggle = async (code: StudioDiscount) => {
+    const response = await fetch(`/api/admin/discounts/${code.id}`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: code.code,
+        label: code.label,
+        type: code.type,
+        percent: code.percent ?? '',
+        amount: code.amountMinor == null ? '' : (code.amountMinor / 100).toFixed(2),
+        minSubtotal: code.minSubtotalMinor ? (code.minSubtotalMinor / 100).toFixed(2) : '',
+        usageLimit: code.usageLimit ?? '',
+        active: !code.active,
+      }),
+    });
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      const message = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not update this code.';
+      setError(message);
+      return;
+    }
+    await load();
+  };
+  const remove = async (code: StudioDiscount) => {
+    if (!window.confirm(`Delete code ${code.code}? Customers will no longer be able to use it.`)) return;
+    const response = await fetch(`/api/admin/discounts/${code.id}`, { method: 'DELETE', credentials: 'include' });
+    if (!response.ok && response.status !== 204) {
+      setError('Could not delete this code.');
+      return;
+    }
+    await load();
+  };
+  return <AdminLayout>
+    <div className="admin-top"><div><span className="eyebrow">Offers</span><h1>Discount codes</h1></div></div>
+    <p className="product-size" style={{marginTop:0}}>A code can take a percent off the fragrance subtotal, a fixed New Zealand dollar amount off that subtotal, or make delivery free. It stacks with the automatic offer on orders over $100. The fragrance total never goes below zero.</p>
+    {error && <div className="notice error">{error}</div>}
+    <form className="admin-form" onSubmit={(event) => void create(event)}>
+      <label>Code<input required className="field" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="WELCOME10" data-testid="input-discount-code-admin"/></label>
+      <label>Private note<input className="field" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="Launch offer"/></label>
+      <label>What it does<select className="select" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} data-testid="select-discount-type"><option value="percent">Percent off</option><option value="fixed">Fixed amount off</option><option value="free_shipping">Free delivery</option></select></label>
+      {form.type === 'percent' && <label>Percent<input required className="field" type="number" min="1" max="100" value={form.percent} onChange={(e) => setForm({ ...form, percent: e.target.value })}/></label>}
+      {form.type === 'fixed' && <label>Amount NZD<input required className="field" type="number" min="0.01" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}/></label>}
+      <label>Minimum spend NZD<input className="field" type="number" min="0" step="0.01" value={form.minSubtotal} onChange={(e) => setForm({ ...form, minSubtotal: e.target.value })} placeholder="Optional"/></label>
+      <label>Use limit<input className="field" type="number" min="1" value={form.usageLimit} onChange={(e) => setForm({ ...form, usageLimit: e.target.value })} placeholder="Unlimited"/></label>
+      <div className="wide"><button className="button button-small" data-testid="button-create-discount">Create code</button></div>
+    </form>
+    {loading ? <div className="skeleton" style={{ height: 180 }}/> : codes.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Code</th><th>Offer</th><th>Minimum</th><th>Uses</th><th>Status</th><th></th></tr></thead><tbody>{codes.map((code) => <tr key={code.id}><td><strong>{code.code}</strong>{code.label && <div className="product-size">{code.label}</div>}</td><td>{code.summary}</td><td>{code.minSubtotalMinor ? money(code.minSubtotalMinor) : '—'}</td><td>{code.usedCount}{code.usageLimit ? ` / ${code.usageLimit}` : ''}</td><td><span className="status-pill">{code.active ? 'active' : 'paused'}</span></td><td><div className="admin-actions"><button type="button" className="button button-outline button-small" onClick={() => void toggle(code)}>{code.active ? 'Pause' : 'Activate'}</button><button type="button" className="button button-outline button-small" onClick={() => void remove(code)}>Delete</button></div></td></tr>)}</tbody></table></div> : <EmptyAdmin message="No discount codes yet."/>}
+  </AdminLayout>;
+}
+
 function Router({cart}:{cart:CartApi}) {
   const [location]=useLocation();
   return <ErrorBoundary resetKey={location}><Shell cart={cart}><Switch>
@@ -1081,7 +1235,7 @@ function Router({cart}:{cart:CartApi}) {
     <Route path="/terms"><StoreInfoPage page="terms"/></Route>
     <Route path="/account/settings"><AccountSettingsPage/></Route><Route path="/account"><AccountPage/></Route>
     <Route path="/sign-in/*?" component={SignInPage}/><Route path="/sign-up/*?" component={SignUpPage}/>
-    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route>
+    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route><Route path="/admin/discounts"><AdminDiscounts/></Route>
     <Route><main className="wrap" style={{padding:'100px 0'}}><span className="eyebrow">404 · Not found</span><h1 className="section-heading">This page has drifted.</h1><Link className="button" href="/">Return home</Link></main></Route>
   </Switch></Shell></ErrorBoundary>;
 }

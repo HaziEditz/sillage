@@ -23,7 +23,7 @@ services:
       - key: ADMIN_EMAILS
         sync: false
       - key: PAYPAL_MODE
-        sync: false
+        value: live
       - key: PAYPAL_LIVE_CLIENT_ID
         sync: false
       - key: PAYPAL_LIVE_CLIENT_SECRET
@@ -33,10 +33,8 @@ services:
       - key: PAYPAL_SANDBOX_CLIENT_SECRET
         sync: false
       - key: PAYPAL_LIVE_CHECKOUT_ENABLED
-        sync: false
+        value: "true"
       - key: STORE_POLICIES_FINAL
-        sync: false
-      - key: PUBLIC_APP_URL
-        sync: false
+        value: "true"
       - key: SHIPPING_FEE_MINOR
-        sync: false
+        value: "1500"

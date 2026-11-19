@@ -44,6 +44,7 @@ import {
 } from "@workspace/api-zod";
 import {
   db,
+  discountCodesTable,
   inventoryMovementsTable,
   orderItemsTable,
   ordersTable,
@@ -54,8 +55,8 @@ import {
   DISCOUNT_PERCENT,
   DISCOUNT_THRESHOLD_MINOR,
   FREE_SHIPPING_THRESHOLD_MINOR,
-  shippingForSubtotal,
-  discountForSubtotal,
+  discountOfferLabel,
+  quoteCheckout,
 } from "../lib/pricing";
 import { isAdminUser, requireAdmin } from "../middlewares/requireAdmin";
 
@@ -190,27 +191,14 @@ function shippingFeeMinor(mode: PayPalMode) {
   return fee;
 }
 
-function liveCheckoutReady() {
-  if (process.env.PAYPAL_LIVE_CHECKOUT_ENABLED !== "true") return false;
-  if (process.env.STORE_POLICIES_FINAL !== "true") return false;
-  try {
-    livePublicAppUrl();
-    return true;
-  } catch {
-    return false;
-  }
-}
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-function livePublicAppUrl() {
-  const configuredUrl = process.env.PUBLIC_APP_URL;
-  if (!configuredUrl) {
-    throw new Error("Set PUBLIC_APP_URL to your public HTTPS store URL before enabling live checkout.");
-  }
+function normalizePublicHttpsUrl(value: string) {
   let url: URL;
   try {
-    url = new URL(configuredUrl);
+    url = new URL(value);
   } catch {
-    throw new Error("PUBLIC_APP_URL must be a valid public HTTPS URL.");
+    throw new Error("The store URL must be a valid public HTTPS URL.");
   }
   if (
     url.protocol !== "https:" ||
@@ -218,11 +206,37 @@ function livePublicAppUrl() {
     url.password ||
     url.search ||
     url.hash ||
-    ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+    LOCAL_HOSTS.has(url.hostname)
   ) {
-    throw new Error("PUBLIC_APP_URL must be a public HTTPS base URL without credentials, query, or fragment.");
+    throw new Error("The store URL must be a public HTTPS address.");
   }
-  return url.toString().replace(/\/+$/, "");
+  return url.origin;
+}
+
+function configuredPublicUrl() {
+  for (const candidate of [process.env.PUBLIC_APP_URL, process.env.RENDER_EXTERNAL_URL]) {
+    if (!candidate) continue;
+    try {
+      return normalizePublicHttpsUrl(candidate);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function requestPublicUrl(req: Request) {
+  const host = req.get("host");
+  if (!host || req.protocol !== "https") return null;
+  const hostname = host.split(":")[0];
+  if (!hostname || LOCAL_HOSTS.has(hostname)) return null;
+  return `https://${host}`;
+}
+
+function liveCheckoutReady(req: Request) {
+  if (process.env.PAYPAL_LIVE_CHECKOUT_ENABLED !== "true") return false;
+  if (process.env.STORE_POLICIES_FINAL !== "true") return false;
+  return Boolean(configuredPublicUrl() ?? requestPublicUrl(req));
 }
 
 function paypalModeForOrder(order: OrderRow): PayPalMode {
@@ -287,7 +301,14 @@ async function paypalRequest<T>(
 }
 
 function publicBaseUrl(req: Request, mode: PayPalMode) {
-  if (mode === "live") return livePublicAppUrl();
+  const publicUrl = configuredPublicUrl() ?? requestPublicUrl(req);
+  if (mode === "live") {
+    if (!publicUrl) {
+      throw new Error("Live checkout needs the public HTTPS address Render assigns to this service.");
+    }
+    return publicUrl;
+  }
+  if (publicUrl) return publicUrl;
   const domain = (
     process.env.REPLIT_DOMAINS ??
     process.env.REPLIT_DEV_DOMAIN ??
@@ -343,11 +364,86 @@ async function releaseReservation(orderId: number, finalStatus: "failed" | "canc
         orderId,
       });
     }
+    if (order.discountCode) {
+      await tx
+        .update(discountCodesTable)
+        .set({
+          usedCount: sql`GREATEST(${discountCodesTable.usedCount} - 1, 0)`,
+        })
+        .where(eq(discountCodesTable.code, order.discountCode));
+    }
     await tx
       .update(ordersTable)
       .set({ status: finalStatus })
       .where(eq(ordersTable.id, orderId));
   });
+}
+
+function normalizeDiscountCode(value: unknown) {
+  if (typeof value !== "string") return "";
+  return value.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function discountOfferFromRow(row: typeof discountCodesTable.$inferSelect) {
+  const type = row.type;
+  if (type !== "percent" && type !== "fixed" && type !== "free_shipping") {
+    return null;
+  }
+  return { type, percent: row.percent, amountMinor: row.amountMinor };
+}
+
+function toDiscountCode(row: typeof discountCodesTable.$inferSelect) {
+  const offer = discountOfferFromRow(row);
+  return {
+    id: row.id,
+    code: row.code,
+    label: row.label,
+    type: row.type,
+    percent: row.percent,
+    amountMinor: row.amountMinor,
+    minSubtotalMinor: row.minSubtotalMinor,
+    usageLimit: row.usageLimit,
+    usedCount: row.usedCount,
+    active: row.active,
+    summary: offer ? discountOfferLabel(offer) : row.type,
+    createdAt: row.createdAt,
+  };
+}
+
+function parseDiscountInput(body: unknown) {
+  if (!body || typeof body !== "object") return { error: "Discount details are required." };
+  const input = body as Record<string, unknown>;
+  const code = normalizeDiscountCode(input.code);
+  if (!/^[A-Z0-9-]{3,32}$/.test(code)) {
+    return { error: "Use 3–32 letters, numbers, or hyphens for the code." };
+  }
+  const type = input.type;
+  if (type !== "percent" && type !== "fixed" && type !== "free_shipping") {
+    return { error: "Choose a percent discount, a fixed amount, or free delivery." };
+  }
+  const percent = type === "percent" ? Number(input.percent) : null;
+  const amountMinor = type === "fixed" ? Math.round(Number(input.amount) * 100) : null;
+  if (type === "percent" && (!Number.isInteger(percent) || percent! < 1 || percent! > 100)) {
+    return { error: "Percent discounts must be a whole number from 1 to 100." };
+  }
+  if (type === "fixed" && (!Number.isInteger(amountMinor) || amountMinor! < 1)) {
+    return { error: "Enter a fixed discount greater than zero." };
+  }
+  const minSubtotalMinor = input.minSubtotal === "" || input.minSubtotal == null
+    ? 0
+    : Math.round(Number(input.minSubtotal) * 100);
+  if (!Number.isInteger(minSubtotalMinor) || minSubtotalMinor < 0) {
+    return { error: "Minimum spend must be zero or more." };
+  }
+  const usageLimit = input.usageLimit === "" || input.usageLimit == null
+    ? null
+    : Number(input.usageLimit);
+  if (usageLimit !== null && (!Number.isInteger(usageLimit) || usageLimit < 1)) {
+    return { error: "Usage limit must be a whole number, or left empty for unlimited." };
+  }
+  const label = typeof input.label === "string" ? input.label.trim().slice(0, 80) : "";
+  const active = input.active !== false;
+  return { data: { code, type, percent, amountMinor, minSubtotalMinor, usageLimit, label, active } };
 }
 
 router.get("/products", async (req, res): Promise<void> => {
@@ -437,7 +533,7 @@ router.get("/checkout/config", (req, res): void => {
           mode === "live" ? "PAYPAL_LIVE_CLIENT_SECRET" : "PAYPAL_SANDBOX_CLIENT_SECRET"
         ],
     );
-    const liveReady = mode === "sandbox" || liveCheckoutReady();
+    const liveReady = mode === "sandbox" || liveCheckoutReady(req);
     res.json({
       mode,
       shippingMinor,
@@ -687,6 +783,146 @@ router.get("/account/orders", async (req, res): Promise<void> => {
   res.json(orders);
 });
 
+router.post("/checkout/quote", async (req, res): Promise<void> => {
+  const lines = Array.isArray(req.body?.lines) ? req.body.lines : null;
+  if (!lines?.length) {
+    res.status(400).json({ error: "Add a fragrance before using a code." });
+    return;
+  }
+  const quantities = new Map<number, number>();
+  for (const line of lines) {
+    const variantId = Number(line?.variantId);
+    const quantity = Number(line?.quantity);
+    if (!Number.isInteger(variantId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+      res.status(400).json({ error: "The bag could not be priced." });
+      return;
+    }
+    quantities.set(variantId, (quantities.get(variantId) ?? 0) + quantity);
+  }
+  const variants = await db
+    .select()
+    .from(productVariantsTable)
+    .where(inArray(productVariantsTable.id, [...quantities.keys()]));
+  if (variants.length !== quantities.size) {
+    res.status(400).json({ error: "One or more fragrances are no longer available." });
+    return;
+  }
+  const products = await db
+    .select({ id: productsTable.id })
+    .from(productsTable)
+    .where(and(inArray(productsTable.id, variants.map((variant) => variant.productId)), eq(productsTable.status, "published")));
+  if (products.length !== new Set(variants.map((variant) => variant.productId)).size) {
+    res.status(400).json({ error: "One or more fragrances are no longer available." });
+    return;
+  }
+  let subtotalMinor = 0;
+  for (const variant of variants) {
+    subtotalMinor += variant.priceMinor * (quantities.get(variant.id) ?? 0);
+  }
+  const normalizedCode = normalizeDiscountCode(req.body?.discountCode);
+  let offer: ReturnType<typeof discountOfferFromRow> = null;
+  let applied: ReturnType<typeof toDiscountCode> | null = null;
+  if (normalizedCode) {
+    const [codeRow] = await db
+      .select()
+      .from(discountCodesTable)
+      .where(eq(discountCodesTable.code, normalizedCode))
+      .limit(1);
+    if (!codeRow || !codeRow.active) {
+      res.status(400).json({ error: "That discount code is not valid." });
+      return;
+    }
+    if (codeRow.usageLimit !== null && codeRow.usedCount >= codeRow.usageLimit) {
+      res.status(400).json({ error: "That discount code has been fully used." });
+      return;
+    }
+    if (subtotalMinor < codeRow.minSubtotalMinor) {
+      res.status(400).json({ error: `This code needs a fragrance subtotal of at least $${money(codeRow.minSubtotalMinor)}.` });
+      return;
+    }
+    offer = discountOfferFromRow(codeRow);
+    if (!offer) {
+      res.status(400).json({ error: "That discount code is not valid." });
+      return;
+    }
+    applied = toDiscountCode(codeRow);
+  }
+  let shippingMinor: number;
+  try {
+    shippingMinor = shippingFeeMinor(paypalMode());
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "Shipping is not configured." });
+    return;
+  }
+  const quote = quoteCheckout(subtotalMinor, shippingMinor, offer);
+  res.json({
+    ...quote,
+    discountCode: applied?.code ?? null,
+    discountSummary: applied?.summary ?? null,
+  });
+});
+
+router.get("/admin/discounts", requireAdmin, async (_req, res): Promise<void> => {
+  const rows = await db.select().from(discountCodesTable).orderBy(desc(discountCodesTable.createdAt));
+  res.json(rows.map(toDiscountCode));
+});
+
+router.post("/admin/discounts", requireAdmin, async (req, res): Promise<void> => {
+  const parsed = parseDiscountInput(req.body);
+  if ("error" in parsed) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+  try {
+    const [row] = await db.insert(discountCodesTable).values(parsed.data).returning();
+    res.status(201).json(toDiscountCode(row));
+  } catch (error) {
+    req.log.error({ error }, "Failed to create discount code");
+    res.status(409).json({ error: "That code already exists." });
+  }
+});
+
+router.patch("/admin/discounts/:id", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Discount not found." });
+    return;
+  }
+  const parsed = parseDiscountInput(req.body);
+  if ("error" in parsed) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+  try {
+    const [row] = await db
+      .update(discountCodesTable)
+      .set(parsed.data)
+      .where(eq(discountCodesTable.id, id))
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Discount not found." });
+      return;
+    }
+    res.json(toDiscountCode(row));
+  } catch (error) {
+    req.log.error({ error }, "Failed to update discount code");
+    res.status(409).json({ error: "That code already exists." });
+  }
+});
+
+router.delete("/admin/discounts/:id", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const [row] = await db
+    .delete(discountCodesTable)
+    .where(eq(discountCodesTable.id, id))
+    .returning({ id: discountCodesTable.id });
+  if (!row) {
+    res.status(404).json({ error: "Discount not found." });
+    return;
+  }
+  res.status(204).end();
+});
+
 router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
   const parsed = CreatePayPalOrderBody.safeParse(req.body);
   if (!parsed.success) {
@@ -789,9 +1025,34 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
         }
         subtotalMinor += variant.priceMinor * quantity;
       }
-      const discountMinor = discountForSubtotal(subtotalMinor);
-      const chargedShippingMinor = shippingForSubtotal(subtotalMinor, shippingMinor);
-      const totalMinor = subtotalMinor - discountMinor + chargedShippingMinor;
+      const normalizedCode = normalizeDiscountCode(input.discountCode);
+      let offer: ReturnType<typeof discountOfferFromRow> = null;
+      let appliedCode: string | null = null;
+      if (normalizedCode) {
+        const [codeRow] = await tx
+          .select()
+          .from(discountCodesTable)
+          .where(eq(discountCodesTable.code, normalizedCode))
+          .for("update");
+        if (!codeRow || !codeRow.active) throw new Error("That discount code is not valid.");
+        if (codeRow.usageLimit !== null && codeRow.usedCount >= codeRow.usageLimit) {
+          throw new Error("That discount code has been fully used.");
+        }
+        if (subtotalMinor < codeRow.minSubtotalMinor) {
+          throw new Error(`This code needs a fragrance subtotal of at least $${money(codeRow.minSubtotalMinor)}.`);
+        }
+        offer = discountOfferFromRow(codeRow);
+        if (!offer) throw new Error("That discount code is not valid.");
+        await tx
+          .update(discountCodesTable)
+          .set({ usedCount: sql`${discountCodesTable.usedCount} + 1` })
+          .where(eq(discountCodesTable.id, codeRow.id));
+        appliedCode = codeRow.code;
+      }
+      const quote = quoteCheckout(subtotalMinor, shippingMinor, offer);
+      const discountMinor = quote.automaticDiscountMinor + quote.codeDiscountMinor;
+      const chargedShippingMinor = quote.shippingMinor;
+      const totalMinor = quote.totalMinor;
       const orderNumber = `SF-${Date.now().toString(36).toUpperCase()}-${randomUUID().slice(0, 4).toUpperCase()}`;
       const [order] = await tx
         .insert(ordersTable)
@@ -807,6 +1068,7 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
           postcode: input.postcode,
           subtotalMinor,
           discountMinor,
+          discountCode: appliedCode,
           shippingMinor: chargedShippingMinor,
           totalMinor,
           currency: NZD,
