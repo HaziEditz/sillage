@@ -190,6 +190,17 @@ function shippingFeeMinor(mode: PayPalMode) {
   return fee;
 }
 
+function liveCheckoutReady() {
+  if (process.env.PAYPAL_LIVE_CHECKOUT_ENABLED !== "true") return false;
+  if (process.env.STORE_POLICIES_FINAL !== "true") return false;
+  try {
+    livePublicAppUrl();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function livePublicAppUrl() {
   const configuredUrl = process.env.PUBLIC_APP_URL;
   if (!configuredUrl) {
@@ -426,11 +437,7 @@ router.get("/checkout/config", (req, res): void => {
           mode === "live" ? "PAYPAL_LIVE_CLIENT_SECRET" : "PAYPAL_SANDBOX_CLIENT_SECRET"
         ],
     );
-    const liveReady =
-      mode === "sandbox" ||
-      (process.env.PAYPAL_LIVE_CHECKOUT_ENABLED === "true" &&
-        process.env.STORE_POLICIES_FINAL === "true" &&
-        Boolean(livePublicAppUrl()));
+    const liveReady = mode === "sandbox" || liveCheckoutReady();
     res.json({
       mode,
       shippingMinor,

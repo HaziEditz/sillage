@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import express, { type Express } from "express";
 import cors from "cors";
 import { clerkMiddleware } from "@clerk/express";
@@ -47,5 +50,25 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", router);
+
+const storefront = [
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../sillage-fragrance/dist/public"),
+  path.resolve(process.cwd(), "artifacts/sillage-fragrance/dist/public"),
+].find((dir) => existsSync(path.join(dir, "index.html")));
+
+if (storefront) {
+  app.use(express.static(storefront, { index: false }));
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      next();
+      return;
+    }
+    if (req.path.startsWith("/api")) {
+      next();
+      return;
+    }
+    res.sendFile(path.join(storefront, "index.html"));
+  });
+}
 
 export default app;
