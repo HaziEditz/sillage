@@ -25,6 +25,7 @@ export const productsTable = pgTable(
     scentFamily: text("scent_family"),
     notes: jsonb("notes").$type<string[]>().notNull().default([]),
     imageUrl: text("image_url"),
+    imageUrls: jsonb("image_urls").$type<string[]>().notNull().default([]),
     status: text("status").notNull().default("draft"),
     featured: boolean("featured").notNull().default(false),
     bestseller: boolean("bestseller").notNull().default(false),

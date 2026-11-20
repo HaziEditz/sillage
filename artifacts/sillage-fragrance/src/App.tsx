@@ -5,7 +5,7 @@ import { ClerkProvider, Show, SignIn, SignUp, UserProfile, useClerk, useUser } f
 import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import {
-  ArrowLeft, ArrowRight, Check, CircleHelp, Instagram,
+  ArrowLeft, ArrowRight, Check, CircleHelp, Instagram, ZoomIn,
   KeyRound, LoaderCircle, LogOut, Menu, Minus, Package, PackageCheck, Plus, Search, ShieldCheck, ShoppingBag,
   Trash2, Truck, UserRound, X,
 } from 'lucide-react';
@@ -721,6 +721,82 @@ function SamplesPage({ cart }: { cart: CartApi }) {
   </main>;
 }
 
+function productPhotos(product: Product) {
+  return [...new Set([product.imageUrl, ...(product.imageUrls ?? [])].filter((url): url is string => Boolean(url)))];
+}
+
+function ProductGallery({ product }: { product: Product }) {
+  const photos = productPhotos(product);
+  const [active, setActive] = useState(0);
+  const [open, setOpen] = useState(false);
+  const photo = photos[active] ?? null;
+  if (!photo) return <ProductImage product={product} className="detail-image"/>;
+  return <div className="detail-gallery">
+    <button type="button" className="product-art detail-image gallery-open" onClick={() => setOpen(true)} aria-label="Open photo and zoom" data-testid="button-open-photo">
+      <img src={photo} alt={`${product.brand} ${product.name}`}/>
+      <span className="zoom-hint"><ZoomIn size={14}/> Zoom</span>
+    </button>
+    {photos.length > 1 && <div className="photo-thumbs">{photos.map((url, index) => <button type="button" key={url} className={index === active ? 'selected' : ''} onClick={() => setActive(index)} aria-label={`Photo ${index + 1}`} aria-pressed={index === active}><img src={url} alt=""/></button>)}</div>}
+    {open && <PhotoZoom photos={photos} index={active} name={`${product.brand} ${product.name}`} onIndex={setActive} onClose={() => setOpen(false)}/>}
+  </div>;
+}
+
+function PhotoZoom({ photos, index, name, onIndex, onClose }: { photos: string[]; index: number; name: string; onIndex: (index: number) => void; onClose: () => void }) {
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const changeScale = (next: number) => {
+    const value = Math.min(4, Math.max(1, next));
+    setScale(value);
+    if (value === 1) setOffset({ x: 0, y: 0 });
+  };
+  useEffect(() => { setScale(1); setOffset({ x: 0, y: 0 }); }, [index]);
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+      if (event.key === 'ArrowRight') onIndex((index + 1) % photos.length);
+      if (event.key === 'ArrowLeft') onIndex((index - 1 + photos.length) % photos.length);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', onKey); };
+  }, [index, onClose, onIndex, photos.length]);
+  useEffect(() => {
+    const node = stage.current;
+    if (!node) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      changeScale(scale + (event.deltaY < 0 ? 0.25 : -0.25));
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [scale]);
+  return <div className="lightbox" role="dialog" aria-modal="true" aria-label={`${name} photos`}>
+    <div className="lightbox-bar">
+      <span>{index + 1} / {photos.length}</span>
+      <div>
+        <button type="button" aria-label="Zoom out" onClick={() => changeScale(scale - 0.5)}><Minus size={16}/></button>
+        <button type="button" aria-label="Zoom in" onClick={() => changeScale(scale + 0.5)}><Plus size={16}/></button>
+        {photos.length > 1 && <button type="button" aria-label="Previous photo" onClick={() => onIndex((index - 1 + photos.length) % photos.length)}><ArrowLeft size={16}/></button>}
+        {photos.length > 1 && <button type="button" aria-label="Next photo" onClick={() => onIndex((index + 1) % photos.length)}><ArrowRight size={16}/></button>}
+        <button type="button" aria-label="Close photos" onClick={onClose}><X size={16}/></button>
+      </div>
+    </div>
+    <div
+      className="lightbox-stage"
+      ref={stage}
+      onPointerDown={(event) => { if (scale <= 1) return; drag.current = { x: event.clientX, y: event.clientY, ox: offset.x, oy: offset.y }; (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId); }}
+      onPointerMove={(event) => { if (!drag.current) return; setOffset({ x: drag.current.ox + event.clientX - drag.current.x, y: drag.current.oy + event.clientY - drag.current.y }); }}
+      onPointerUp={() => { drag.current = null; }}
+      onDoubleClick={() => changeScale(scale === 1 ? 2 : 1)}
+    >
+      <img src={photos[index]} alt={name} draggable={false} style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}/>
+    </div>
+  </div>;
+}
+
 function ProductPageView({ cart }: { cart: CartApi }) {
   const { slug = '' } = useParams<{slug:string}>();
   const { data: product, isLoading, isError, refetch } = useGetProduct(slug);
@@ -734,7 +810,7 @@ function ProductPageView({ cart }: { cart: CartApi }) {
   const variant = bottles.find((item)=>item.id === selected) || bottles[0];
   return <main className="wrap">
     <div style={{paddingTop:30}}><Link href="/shop" className="eyebrow"><ArrowLeft size={13}/> Back to fragrance</Link></div>
-    <div className="detail-grid"><ProductImage product={product} className="detail-image"/><div className="detail-info"><span className="detail-brand">{product.brand}</span><h1>{product.name}</h1><p className="detail-description">{product.description}</p>
+    <div className="detail-grid"><ProductGallery key={product.slug} product={product}/><div className="detail-info"><span className="detail-brand">{product.brand}</span><h1>{product.name}</h1><p className="detail-description">{product.description}</p>
       <div className="detail-price">{variant ? money(variant.priceMinor) : 'Price unavailable'}</div>
       <span className="eyebrow">Choose a size</span><div className="variant-list">{bottles.map((item)=> <button key={item.id} onClick={()=>{setSelected(item.id);setAdded(false);}} className={`variant-option ${variant?.id===item.id?'selected':''}`} aria-pressed={variant?.id===item.id} data-testid={`button-variant-${item.id}`}>{item.size}</button>)}</div>
       <button className="button" disabled={!variant || variant.stock < 1} onClick={()=>{if(variant){cart.add(product,variant);setAdded(true);}}} data-testid="button-add-to-cart">{variant?.stock===0?'Currently unavailable':added?<><Check size={15}/> Added to bag</>:<>Add to bag <ArrowRight size={14}/></>}</button>
@@ -1075,11 +1151,14 @@ function ProductEditor({product,onClose}:{product?:Product;onClose:()=>void}) {
   const create=useCreateProduct();
   const update=useUpdateProduct();
   const [error,setError]=useState('');
-  const [fields,setFields]=useState({name:product?.name||'',brand:product?.brand||'',description:product?.description||'',audience:product?.audience||'',concentration:product?.concentration||'',scentFamily:product?.scentFamily||'',imageUrl:product?.imageUrl||'',status:product?.status||'draft',featured:product?.featured||false,bestseller:product?.bestseller||false,notes:product?.notes?.join(', ')||''});
+  const [fields,setFields]=useState({name:product?.name||'',brand:product?.brand||'',description:product?.description||'',audience:product?.audience||'',concentration:product?.concentration||'',scentFamily:product?.scentFamily||'',imageUrl:product?.imageUrl||'',imageUrls:(product?.imageUrls??[]).join('\n'),status:product?.status||'draft',featured:product?.featured||false,bestseller:product?.bestseller||false,notes:product?.notes?.join(', ')||''});
   const [variants,setVariants]=useState(()=>product?.variants.map(v=>({size:v.size,sku:v.sku,price:(v.priceMinor/100).toFixed(2),stock:String(v.stock)}))||[{size:'',sku:'',price:'',stock:'0'}]);
   const set=(key:keyof typeof fields,value:string|boolean)=>setFields((old)=>({...old,[key]:value}));
   const submit=(e:FormEvent)=>{e.preventDefault();setError('');
-    const common={name:fields.name,brand:fields.brand,description:fields.description,audience:fields.audience,concentration:fields.concentration||null,scentFamily:fields.scentFamily||null,imageUrl:fields.imageUrl||null,status:fields.status as ProductInput['status'],featured:fields.featured,bestseller:fields.bestseller,notes:fields.notes.split(',').map(x=>x.trim()).filter(Boolean)};
+    const imageUrls=fields.imageUrls.split('\n').map(line=>line.trim()).filter(Boolean);
+    if(imageUrls.length>8){setError('Add up to 8 extra photos.');return;}
+    if(imageUrls.some(url=>{try{const parsed=new URL(url);return parsed.protocol!=='http:'&&parsed.protocol!=='https:';}catch{return true;}})){setError('Each extra photo needs a full image link, one per line.');return;}
+    const common={name:fields.name,brand:fields.brand,description:fields.description,audience:fields.audience,concentration:fields.concentration||null,scentFamily:fields.scentFamily||null,imageUrl:fields.imageUrl||null,imageUrls,status:fields.status as ProductInput['status'],featured:fields.featured,bestseller:fields.bestseller,notes:fields.notes.split(',').map(x=>x.trim()).filter(Boolean)};
     if(product){update.mutate({id:product.id,data:common as ProductUpdate},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetProductsQueryKey()});onClose();},onError:()=>setError('Unable to update this fragrance. Check your fields and try again.')});}
     else {const data:ProductInput={...common,variants:variants.map(v=>({size:v.size,sku:v.sku,priceMinor:Math.round(Number(v.price)*100),stock:Number(v.stock)}))};create.mutate({data},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetAdminDashboardQueryKey()});onClose();},onError:()=>setError('Unable to create this fragrance. Check required details and try again.')});}
   };
@@ -1088,7 +1167,7 @@ function ProductEditor({product,onClose}:{product?:Product;onClose:()=>void}) {
     <label>Name<input required className="field" value={fields.name} onChange={(e)=>set('name',e.target.value)} data-testid="input-product-name"/></label><label>Brand<input required className="field" value={fields.brand} onChange={(e)=>set('brand',e.target.value)} data-testid="input-product-brand"/></label>
     <label className="wide">Description<textarea className="textarea" rows={4} value={fields.description} onChange={(e)=>set('description',e.target.value)} data-testid="input-product-description"/></label>
     <label>Audience<input required className="field" value={fields.audience} onChange={(e)=>set('audience',e.target.value)} placeholder="Use the product’s actual audience" data-testid="input-product-audience"/></label><label>Concentration<input className="field" value={fields.concentration} onChange={(e)=>set('concentration',e.target.value)} data-testid="input-product-concentration"/></label>
-    <label>Scent family<input className="field" value={fields.scentFamily} onChange={(e)=>set('scentFamily',e.target.value)} data-testid="input-product-family"/></label><label>Image URL<input className="field" value={fields.imageUrl} onChange={(e)=>set('imageUrl',e.target.value)} data-testid="input-product-image"/></label>
+    <label>Scent family<input className="field" value={fields.scentFamily} onChange={(e)=>set('scentFamily',e.target.value)} data-testid="input-product-family"/></label><label>Main photo URL<input className="field" value={fields.imageUrl} onChange={(e)=>set('imageUrl',e.target.value)} data-testid="input-product-image"/></label><label className="wide">More photos, one link per line<textarea className="textarea" rows={4} value={fields.imageUrls} onChange={(e)=>set('imageUrls',e.target.value)} placeholder="https://…" data-testid="input-product-photos"/></label>
     <label>Notes, separated by commas<input className="field" value={fields.notes} onChange={(e)=>set('notes',e.target.value)} data-testid="input-product-notes"/></label><label>Status<select className="select" value={fields.status} onChange={(e)=>set('status',e.target.value)} data-testid="select-product-status"><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></select></label>
     <label><span>Featured</span><input type="checkbox" checked={fields.featured} onChange={(e)=>set('featured',e.target.checked)} data-testid="input-product-featured"/></label><label><span>Bestseller</span><input type="checkbox" checked={fields.bestseller} onChange={(e)=>set('bestseller',e.target.checked)} data-testid="input-product-bestseller"/></label>
     {!product && <div className="variant-editor"><span className="eyebrow">Variants · at least one required</span>{variants.map((variant,index)=><div className="variant-row" key={index}><input required className="field" placeholder="Size" value={variant.size} onChange={(e)=>setVariants(a=>a.map((v,i)=>i===index?{...v,size:e.target.value}:v))} aria-label={`Variant ${index+1} size`}/><input required className="field" placeholder="SKU" value={variant.sku} onChange={(e)=>setVariants(a=>a.map((v,i)=>i===index?{...v,sku:e.target.value}:v))} aria-label={`Variant ${index+1} SKU`}/><input required type="number" min="0" step=".01" className="field" placeholder="Price NZD" value={variant.price} onChange={(e)=>setVariants(a=>a.map((v,i)=>i===index?{...v,price:e.target.value}:v))} aria-label={`Variant ${index+1} price`}/><input required type="number" min="0" className="field" placeholder="Stock" value={variant.stock} onChange={(e)=>setVariants(a=>a.map((v,i)=>i===index?{...v,stock:e.target.value}:v))} aria-label={`Variant ${index+1} stock`}/><button type="button" className="icon-button" aria-label="Remove variant" onClick={()=>setVariants(a=>a.length>1?a.filter((_,i)=>i!==index):a)}><Trash2 size={15}/></button></div>)}<button type="button" className="button button-outline button-small" onClick={()=>setVariants(a=>[...a,{size:'',sku:'',price:'',stock:'0'}])} data-testid="button-add-variant"><Plus size={13}/> Add variant</button></div>}

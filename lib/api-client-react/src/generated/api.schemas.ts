@@ -46,6 +46,7 @@ export interface Product {
   notes?: string[];
   /** @nullable */
   imageUrl: string | null;
+  imageUrls?: string[];
   status: ProductStatus;
   featured: boolean;
   bestseller: boolean;
@@ -98,6 +99,7 @@ export interface ProductInput {
   notes?: string[];
   /** @nullable */
   imageUrl?: string | null;
+  imageUrls?: string[];
   status?: ProductInputStatus;
   featured?: boolean;
   bestseller?: boolean;
@@ -128,6 +130,7 @@ export interface ProductUpdate {
   notes?: string[];
   /** @nullable */
   imageUrl?: string | null;
+  imageUrls?: string[];
   status?: ProductUpdateStatus;
   featured?: boolean;
   bestseller?: boolean;
