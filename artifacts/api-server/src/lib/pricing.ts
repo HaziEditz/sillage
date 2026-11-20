@@ -20,8 +20,13 @@ export function discountForSubtotal(subtotalMinor: number) {
     : 0;
 }
 
-export function shippingForSubtotal(subtotalMinor: number, shippingFeeMinor: number) {
-  return subtotalMinor > FREE_SHIPPING_THRESHOLD_MINOR ? 0 : shippingFeeMinor;
+export function shippingForSubtotal(
+  subtotalMinor: number,
+  shippingFeeMinor: number,
+  freeThresholdMinor = FREE_SHIPPING_THRESHOLD_MINOR,
+) {
+  if (freeThresholdMinor <= 0) return shippingFeeMinor;
+  return subtotalMinor > freeThresholdMinor ? 0 : shippingFeeMinor;
 }
 
 export type DiscountCodeType = "percent" | "fixed" | "free_shipping";
@@ -45,6 +50,7 @@ export function quoteCheckout(
   subtotalMinor: number,
   shippingFee: number,
   offer: DiscountOffer | null,
+  freeThresholdMinor = FREE_SHIPPING_THRESHOLD_MINOR,
 ): CheckoutQuote {
   const automaticDiscountMinor = discountForSubtotal(subtotalMinor);
   let rawCodeDiscount = 0;
@@ -62,7 +68,7 @@ export function quoteCheckout(
   );
   const shippingMinor = freeShipping
     ? 0
-    : shippingForSubtotal(subtotalMinor, shippingFee);
+    : shippingForSubtotal(subtotalMinor, shippingFee, freeThresholdMinor);
   return {
     subtotalMinor,
     automaticDiscountMinor,

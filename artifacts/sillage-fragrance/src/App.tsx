@@ -97,6 +97,7 @@ type PayPalCheckoutConfig = {
 };
 function deliveryForSubtotal(config: PayPalCheckoutConfig | undefined, subtotalMinor: number) {
   if (!config) return undefined;
+  if (config.freeShippingThresholdMinor <= 0) return config.shippingMinor;
   return subtotalMinor > config.freeShippingThresholdMinor ? 0 : config.shippingMinor;
 }
 const CART_KEY = 'sillage-cart-v1';
@@ -623,10 +624,26 @@ function PolicyBlockView({ block }: { block: PolicyBlock }) {
 }
 
 function StoreInfoPage({ page }: { page: StoreInfoPageKey }) {
+  const configQuery = useQuery({
+    queryKey: ['paypal-checkout-config'],
+    queryFn: loadPayPalCheckoutConfig,
+    enabled: page === 'shipping' || page === 'terms',
+    retry: false,
+  });
   const content = storeInfoPages[page];
+  const chargeLine = configQuery.data
+    ? `Delivery within New Zealand is ${money(configQuery.data.shippingMinor)}. ${configQuery.data.freeShippingThresholdMinor > 0 ? `Orders over ${money(configQuery.data.freeShippingThresholdMinor)} ship free. ` : ''}The delivery charge is shown at checkout${page === 'shipping' ? ', before you pay' : ''}.`
+    : null;
+  const sections = content.sections.map((section) => ({
+    ...section,
+    blocks: section.blocks.map((block) => {
+      if (!chargeLine || block.kind !== 'p' || typeof block.parts[0] !== 'string' || !block.parts[0].startsWith('Delivery within New Zealand is')) return block;
+      return { ...block, parts: [chargeLine] };
+    }),
+  }));
   return <main className="wrap policy-page">
     <div className="page-head"><span className="eyebrow">Arvessó Fragrances{content.updated ? ` · Updated ${content.updated}` : ''}</span><h1>{content.title}</h1>{content.intro.map((parts, index) => <p key={index}><PolicyInlines parts={parts}/></p>)}</div>
-    <div className="policy-content">{content.sections.map((section) => <section className="policy-section" key={section.title}><h2>{section.title}</h2>{section.blocks.map((block, index) => <PolicyBlockView key={index} block={block}/>)}</section>)}</div>
+    <div className="policy-content">{sections.map((section) => <section className="policy-section" key={section.title}><h2>{section.title}</h2>{section.blocks.map((block, index) => <PolicyBlockView key={index} block={block}/>)}</section>)}</div>
   </main>;
 }
 
@@ -1031,7 +1048,7 @@ function AccountSettingsPage() {
   return <main className="wrap account-settings-page"><div className="account-settings-heading"><Link className="text-link eyebrow" href="/account"><ArrowLeft size={13}/> Back to your account</Link><h1>Profile & security</h1></div><UserProfile routing="hash"/></main>;
 }
 
-const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders'],['/admin/cash','Cash'],['/admin/discounts','Discounts']];
+const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders'],['/admin/cash','Cash'],['/admin/delivery','Delivery'],['/admin/discounts','Discounts']];
 function AdminLayout({children}:{children:ReactNode}) {
   const [path]=useLocation();
   const {data:health,isLoading}=useHealthCheck({query:{queryKey:getHealthCheckQueryKey(),retry:1}});
@@ -1292,6 +1309,87 @@ function AdminCash() {
   </AdminLayout>;
 }
 
+type DeliveryOrder = { id: number; orderNumber: string; recipientName: string; email: string; address: string; totalMinor: number; shippingMinor: number; createdAt: string; tracking: string; items: { name: string; size: string; quantity: number }[] };
+
+function AdminDelivery() {
+  const [fee, setFee] = useState('15.00');
+  const [freeOn, setFreeOn] = useState(true);
+  const [freeOver, setFreeOver] = useState('100.00');
+  const [awaiting, setAwaiting] = useState<DeliveryOrder[]>([]);
+  const [sent, setSent] = useState<DeliveryOrder[]>([]);
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const load = async () => {
+    const response = await fetch('/api/admin/delivery', { credentials: 'include' });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok || !body || typeof body !== 'object' || !('awaiting' in body) || !Array.isArray(body.awaiting) || !('sent' in body) || !Array.isArray(body.sent)) {
+      setError('Could not load delivery.');
+      setLoading(false);
+      return;
+    }
+    const data = body as { shippingFeeMinor: number; freeShippingThresholdMinor: number; awaiting: DeliveryOrder[]; sent: DeliveryOrder[] };
+    setFee((data.shippingFeeMinor / 100).toFixed(2));
+    setFreeOn(data.freeShippingThresholdMinor > 0);
+    if (data.freeShippingThresholdMinor > 0) setFreeOver((data.freeShippingThresholdMinor / 100).toFixed(2));
+    setAwaiting(data.awaiting);
+    setSent(data.sent);
+    setLoading(false);
+  };
+  useEffect(() => { void load(); }, []);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    const response = await fetch('/api/admin/delivery', {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shippingDollars: Number(fee), freeShipping: freeOn, freeOverDollars: Number(freeOver) }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not save delivery.');
+      return;
+    }
+    setMessage('Delivery charge saved. Checkout uses it straight away.');
+    await load();
+  };
+  const markSent = async (order: DeliveryOrder) => {
+    setError('');
+    setMessage('');
+    const response = await fetch(`/api/admin/delivery/${order.id}/send`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tracking: notes[order.id] ?? '' }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not mark this order as sent.');
+      return;
+    }
+    setMessage(`${order.orderNumber} is marked sent.`);
+    await load();
+  };
+  return <AdminLayout>
+    <div className="admin-top"><div><span className="eyebrow">New Zealand</span><h1>Delivery</h1></div></div>
+    <p className="product-size" style={{marginTop:0}}>Keep one flat courier charge for the whole country. Orders still show the amount at checkout before anyone pays. Cash meetups stay separate and are not posted.</p>
+    {error && <div className="notice error">{error}</div>}
+    {message && <div className="notice">{message}</div>}
+    <form className="admin-form" onSubmit={(event) => void save(event)}>
+      <label>Delivery charge (NZD)<input required className="field" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} data-testid="input-delivery-fee"/></label>
+      <label>Free when the order is over<input className="field" inputMode="decimal" value={freeOver} disabled={!freeOn} onChange={(e) => setFreeOver(e.target.value)} data-testid="input-delivery-free"/></label>
+      <label className="wide" style={{display:'flex',alignItems:'center',gap:8}}><input type="checkbox" checked={freeOn} onChange={(e) => setFreeOn(e.target.checked)}/> Free delivery over that amount</label>
+      <div className="wide"><button className="button button-small" data-testid="button-save-delivery">Save delivery</button></div>
+    </form>
+    <div className="section-top"><div><span className="eyebrow">To post</span><h2 className="section-heading" style={{fontSize:34}}>Paid orders</h2></div></div>
+    {loading ? <div className="skeleton" style={{height:180}}/> : awaiting.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Send to</th><th>Items</th><th>Tracking</th></tr></thead><tbody>{awaiting.map((order) => <tr key={order.id}><td>{order.orderNumber}<div className="product-size">{new Date(order.createdAt).toLocaleDateString('en-NZ')} · {money(order.totalMinor)}</div></td><td><strong>{order.recipientName}</strong><div className="product-size">{order.address}</div><div className="product-size">{order.email}</div></td><td>{order.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</td><td><div className="admin-actions"><input className="field" style={{width:180}} value={notes[order.id] ?? ''} onChange={(e) => setNotes((current) => ({ ...current, [order.id]: e.target.value }))} placeholder="Courier or tracking note"/><button type="button" className="button button-outline button-small" onClick={() => void markSent(order)}>Mark sent</button></div></td></tr>)}</tbody></table></div> : <EmptyAdmin message="No paid orders are waiting to be posted."/>}
+    {sent.length > 0 && <div className="table-wrap" style={{marginTop:24}}><table className="data-table"><thead><tr><th>Sent</th><th>Person</th><th>Note</th></tr></thead><tbody>{sent.map((order) => <tr key={order.id}><td>{order.orderNumber}</td><td>{order.recipientName}</td><td>{order.tracking || '—'}</td></tr>)}</tbody></table></div>}
+  </AdminLayout>;
+}
+
 function Router({cart}:{cart:CartApi}) {
   const [location]=useLocation();
   return <ErrorBoundary resetKey={location}><Shell cart={cart}><Switch>
@@ -1306,7 +1404,7 @@ function Router({cart}:{cart:CartApi}) {
     <Route path="/terms"><StoreInfoPage page="terms"/></Route>
     <Route path="/account/settings"><AccountSettingsPage/></Route><Route path="/account"><AccountPage/></Route>
     <Route path="/sign-in/*?" component={SignInPage}/><Route path="/sign-up/*?" component={SignUpPage}/>
-    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route><Route path="/admin/cash"><AdminCash/></Route><Route path="/admin/discounts"><AdminDiscounts/></Route>
+    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route><Route path="/admin/cash"><AdminCash/></Route><Route path="/admin/delivery"><AdminDelivery/></Route><Route path="/admin/discounts"><AdminDiscounts/></Route>
     <Route><main className="wrap" style={{padding:'100px 0'}}><span className="eyebrow">404 · Not found</span><h1 className="section-heading">This page has drifted.</h1><Link className="button" href="/">Return home</Link></main></Route>
   </Switch></Shell></ErrorBoundary>;
 }

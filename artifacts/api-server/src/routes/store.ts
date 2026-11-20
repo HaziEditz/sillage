@@ -16,6 +16,7 @@ import {
   ilike,
   inArray,
   min,
+  ne,
   or,
   sql,
   sum,
@@ -50,6 +51,7 @@ import {
   ordersTable,
   productVariantsTable,
   productsTable,
+  storeSettingsTable,
 } from "@workspace/db";
 import {
   DISCOUNT_PERCENT,
@@ -218,7 +220,37 @@ function paypalCredentials(mode: PayPalMode) {
   return { clientId, secret };
 }
 
-function shippingFeeMinor(mode: PayPalMode) {
+async function deliverySettings() {
+  const [row] = await db
+    .select()
+    .from(storeSettingsTable)
+    .where(eq(storeSettingsTable.id, 1))
+    .limit(1);
+  if (row) {
+    return {
+      shippingFeeMinor: row.shippingFeeMinor,
+      freeShippingThresholdMinor: row.freeShippingThresholdMinor,
+    };
+  }
+  return {
+    shippingFeeMinor: configuredShippingFeeMinor(paypalMode()),
+    freeShippingThresholdMinor: FREE_SHIPPING_THRESHOLD_MINOR,
+  };
+}
+
+function dollarsToMinor(value: unknown, label: string) {
+  const amount = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(amount) || amount < 0 || amount > 1000) {
+    throw new Error(`${label} must be between $0 and $1,000.`);
+  }
+  const minor = Math.round(amount * 100);
+  if (Math.abs(amount * 100 - minor) > 0.01) {
+    throw new Error(`${label} can only use cents.`);
+  }
+  return minor;
+}
+
+function configuredShippingFeeMinor(mode: PayPalMode) {
   const configuredFee = process.env.SHIPPING_FEE_MINOR;
   if (configuredFee === undefined) {
     if (mode === "live") {
@@ -567,10 +599,11 @@ router.get("/admin/access", async (req, res): Promise<void> => {
   }
 });
 
-router.get("/checkout/config", (req, res): void => {
+router.get("/checkout/config", async (req, res): Promise<void> => {
   try {
     const mode = paypalMode();
-    const shippingMinor = shippingFeeMinor(mode);
+    const delivery = await deliverySettings();
+    const shippingMinor = delivery.shippingFeeMinor;
     const credentialsConfigured = Boolean(
       process.env[
         mode === "live" ? "PAYPAL_LIVE_CLIENT_ID" : "PAYPAL_SANDBOX_CLIENT_ID"
@@ -583,7 +616,7 @@ router.get("/checkout/config", (req, res): void => {
     res.json({
       mode,
       shippingMinor,
-      freeShippingThresholdMinor: FREE_SHIPPING_THRESHOLD_MINOR,
+      freeShippingThresholdMinor: delivery.freeShippingThresholdMinor,
       discountThresholdMinor: DISCOUNT_THRESHOLD_MINOR,
       discountPercent: DISCOUNT_PERCENT,
       checkoutEnabled: credentialsConfigured && liveReady,
@@ -925,6 +958,7 @@ router.post("/admin/cash-sales", requireAdmin, async (req, res): Promise<void> =
         totalMinor: subtotalMinor,
         currency: NZD,
         paymentMethod: "cash",
+        fulfillment: "collected",
         status: "paid",
         cancelTokenHash: createHash("sha256").update(requestId).digest("hex"),
         requestId,
@@ -965,6 +999,94 @@ router.post("/admin/cash-sales", requireAdmin, async (req, res): Promise<void> =
     req.log.warn({ error }, "Cash sale rejected");
     res.status(400).json({ error: error instanceof Error ? error.message : "Could not record this cash sale." });
   }
+});
+
+function deliveryAddress(order: typeof ordersTable.$inferSelect) {
+  return [order.address1, order.address2, order.city, order.region, order.postcode]
+    .filter((part) => part && part.trim())
+    .join(", ");
+}
+
+router.get("/admin/delivery", requireAdmin, async (_req, res): Promise<void> => {
+  const settings = await deliverySettings();
+  const orders = await db
+    .select()
+    .from(ordersTable)
+    .where(and(eq(ordersTable.status, "paid"), ne(ordersTable.paymentMethod, "cash")))
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(40);
+  const ids = orders.map((order) => order.id);
+  const items = ids.length
+    ? await db.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, ids))
+    : [];
+  const shape = (order: typeof orders[number]) => ({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    recipientName: order.recipientName,
+    email: order.email,
+    address: deliveryAddress(order),
+    totalMinor: order.totalMinor,
+    shippingMinor: order.shippingMinor,
+    createdAt: order.createdAt,
+    fulfillment: order.fulfillment,
+    tracking: order.tracking ?? "",
+    shippedAt: order.shippedAt,
+    items: items
+      .filter((item) => item.orderId === order.id)
+      .map((item) => ({ name: item.productName, size: item.variantSize, quantity: item.quantity })),
+  });
+  res.json({
+    ...settings,
+    awaiting: orders.filter((order) => order.fulfillment !== "sent").map(shape),
+    sent: orders.filter((order) => order.fulfillment === "sent").map(shape),
+  });
+});
+
+router.put("/admin/delivery", requireAdmin, async (req, res): Promise<void> => {
+  try {
+    const shippingFeeMinor = dollarsToMinor(req.body?.shippingDollars, "Delivery");
+    const freeShipping = req.body?.freeShipping === true;
+    const freeShippingThresholdMinor = freeShipping
+      ? dollarsToMinor(req.body?.freeOverDollars, "Free delivery")
+      : 0;
+    if (freeShipping && freeShippingThresholdMinor <= 0) {
+      res.status(400).json({ error: "Enter the amount an order has to pass before delivery is free." });
+      return;
+    }
+    await db
+      .insert(storeSettingsTable)
+      .values({ id: 1, shippingFeeMinor, freeShippingThresholdMinor, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: storeSettingsTable.id,
+        set: { shippingFeeMinor, freeShippingThresholdMinor, updatedAt: new Date() },
+      });
+    res.json({ shippingFeeMinor, freeShippingThresholdMinor });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Could not save delivery." });
+  }
+});
+
+router.post("/admin/delivery/:id/send", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const tracking = typeof req.body?.tracking === "string" ? req.body.tracking.trim().slice(0, 160) : "";
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Choose an order to send." });
+    return;
+  }
+  const [updated] = await db
+    .update(ordersTable)
+    .set({ fulfillment: "sent", tracking: tracking || null, shippedAt: new Date() })
+    .where(and(
+      eq(ordersTable.id, id),
+      eq(ordersTable.status, "paid"),
+      ne(ordersTable.paymentMethod, "cash"),
+    ))
+    .returning({ id: ordersTable.id, orderNumber: ordersTable.orderNumber });
+  if (!updated) {
+    res.status(404).json({ error: "That paid order could not be marked as sent." });
+    return;
+  }
+  res.json(updated);
 });
 
 router.post("/checkout/quote", async (req, res): Promise<void> => {
@@ -1033,13 +1155,16 @@ router.post("/checkout/quote", async (req, res): Promise<void> => {
     applied = toDiscountCode(codeRow);
   }
   let shippingMinor: number;
+  let freeThresholdMinor: number;
   try {
-    shippingMinor = shippingFeeMinor(paypalMode());
+    const delivery = await deliverySettings();
+    shippingMinor = delivery.shippingFeeMinor;
+    freeThresholdMinor = delivery.freeShippingThresholdMinor;
   } catch (error) {
     res.status(503).json({ error: error instanceof Error ? error.message : "Shipping is not configured." });
     return;
   }
-  const quote = quoteCheckout(subtotalMinor, shippingMinor, offer);
+  const quote = quoteCheckout(subtotalMinor, shippingMinor, offer, freeThresholdMinor);
   res.json({
     ...quote,
     discountCode: applied?.code ?? null,
@@ -1117,6 +1242,7 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
   }
   let mode: PayPalMode;
   let shippingMinor: number;
+  let freeThresholdMinor: number;
   let baseUrl: string;
   try {
     mode = paypalMode();
@@ -1127,7 +1253,9 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
     if (mode === "live" && process.env.STORE_POLICIES_FINAL !== "true") {
       throw new Error("Finalize and review store policies before enabling live checkout.");
     }
-    shippingMinor = shippingFeeMinor(mode);
+    const delivery = await deliverySettings();
+    shippingMinor = delivery.shippingFeeMinor;
+    freeThresholdMinor = delivery.freeShippingThresholdMinor;
     baseUrl = publicBaseUrl(req, mode);
   } catch (error) {
     req.log.warn({ error }, "PayPal checkout is not ready");
@@ -1235,7 +1363,7 @@ router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
           .where(eq(discountCodesTable.id, codeRow.id));
         appliedCode = codeRow.code;
       }
-      const quote = quoteCheckout(subtotalMinor, shippingMinor, offer);
+      const quote = quoteCheckout(subtotalMinor, shippingMinor, offer, freeThresholdMinor);
       const discountMinor = quote.automaticDiscountMinor + quote.codeDiscountMinor;
       const chargedShippingMinor = quote.shippingMinor;
       const totalMinor = quote.totalMinor;

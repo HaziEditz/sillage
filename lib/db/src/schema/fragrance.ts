@@ -86,6 +86,9 @@ export const ordersTable = pgTable(
     totalMinor: integer("total_minor").notNull(),
     currency: text("currency").notNull().default("NZD"),
     paymentMethod: text("payment_method").notNull().default("paypal"),
+    fulfillment: text("fulfillment").notNull().default("to_send"),
+    tracking: text("tracking"),
+    shippedAt: timestamp("shipped_at", { withTimezone: true }),
     status: text("status").notNull().default("pending"),
     paypalOrderId: text("paypal_order_id"),
     paypalApprovalUrl: text("paypal_approval_url"),
@@ -148,6 +151,17 @@ export const discountCodesTable = pgTable(
   },
   (table) => [uniqueIndex("fragrance_discount_codes_code_idx").on(table.code)],
 );
+
+export const storeSettingsTable = pgTable("fragrance_store_settings", {
+  id: integer("id").primaryKey(),
+  shippingFeeMinor: integer("shipping_fee_minor").notNull().default(1500),
+  freeShippingThresholdMinor: integer("free_shipping_threshold_minor")
+    .notNull()
+    .default(10000),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
 
 export const inventoryMovementsTable = pgTable(
   "fragrance_inventory_movements",
