@@ -55,8 +55,13 @@ import {
   DISCOUNT_PERCENT,
   DISCOUNT_THRESHOLD_MINOR,
   FREE_SHIPPING_THRESHOLD_MINOR,
+  SAMPLE_AVAILABLE_STOCK,
+  SAMPLE_PRICE_MINOR,
+  SAMPLE_SIZE,
   discountOfferLabel,
+  isSampleSku,
   quoteCheckout,
+  sampleSku,
 } from "../lib/pricing";
 import { isAdminUser, requireAdmin } from "../middlewares/requireAdmin";
 
@@ -96,6 +101,46 @@ function toProduct(row: ProductRow, variants: VariantRow[]) {
     })),
     createdAt: row.createdAt,
   };
+}
+
+async function syncSampleVariants() {
+  const products = await db
+    .select()
+    .from(productsTable)
+    .where(eq(productsTable.status, "published"));
+  if (products.length === 0) return;
+  const variants = await db
+    .select()
+    .from(productVariantsTable)
+    .where(inArray(productVariantsTable.productId, products.map((product) => product.id)));
+  for (const product of products) {
+    const own = variants.filter((variant) => variant.productId === product.id);
+    const bottles = own.filter((variant) => !isSampleSku(variant.sku));
+    if (bottles.length === 0) continue;
+    const sample = own.find((variant) => variant.sku === sampleSku(product.id));
+    const available = bottles.some((variant) => variant.stock > 0);
+    const stock = !available
+      ? 0
+      : sample && sample.stock > 0
+        ? sample.stock
+        : SAMPLE_AVAILABLE_STOCK;
+    if (!sample) {
+      await db.insert(productVariantsTable).values({
+        productId: product.id,
+        size: SAMPLE_SIZE,
+        sku: sampleSku(product.id),
+        priceMinor: SAMPLE_PRICE_MINOR,
+        stock,
+      });
+      continue;
+    }
+    if (sample.priceMinor !== SAMPLE_PRICE_MINOR || sample.size !== SAMPLE_SIZE || sample.stock !== stock) {
+      await db
+        .update(productVariantsTable)
+        .set({ priceMinor: SAMPLE_PRICE_MINOR, size: SAMPLE_SIZE, stock })
+        .where(eq(productVariantsTable.id, sample.id));
+    }
+  }
 }
 
 async function productResults(rows: ProductRow[]) {
@@ -447,6 +492,7 @@ function parseDiscountInput(body: unknown) {
 }
 
 router.get("/products", async (req, res): Promise<void> => {
+  await syncSampleVariants();
   const params = GetProductsQueryParams.safeParse(req.query);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -551,6 +597,7 @@ router.get("/checkout/config", (req, res): void => {
 });
 
 router.get("/products/:slug", async (req, res): Promise<void> => {
+  await syncSampleVariants();
   const params = GetProductParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
@@ -604,6 +651,7 @@ router.get("/admin/dashboard", requireAdmin, async (req, res): Promise<void> => 
 });
 
 router.get("/admin/products", requireAdmin, async (_req, res): Promise<void> => {
+  await syncSampleVariants();
   const rows = await db.select().from(productsTable).orderBy(desc(productsTable.createdAt));
   const products = await productResults(rows);
   res.json(GetAdminProductsResponse.parse(products));
@@ -783,7 +831,144 @@ router.get("/account/orders", async (req, res): Promise<void> => {
   res.json(orders);
 });
 
+router.get("/admin/cash-sales", requireAdmin, async (_req, res): Promise<void> => {
+  const orders = await db
+    .select()
+    .from(ordersTable)
+    .where(eq(ordersTable.paymentMethod, "cash"))
+    .orderBy(desc(ordersTable.createdAt))
+    .limit(40);
+  const ids = orders.map((order) => order.id);
+  const items = ids.length
+    ? await db.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, ids))
+    : [];
+  res.json(orders.map((order) => ({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    recipientName: order.recipientName,
+    contact: order.email.endsWith("@arvessofragrances.local") ? "" : order.email,
+    note: order.address2 ?? "",
+    totalMinor: order.totalMinor,
+    createdAt: order.createdAt,
+    items: items
+      .filter((item) => item.orderId === order.id)
+      .map((item) => ({
+        name: item.productName,
+        size: item.variantSize,
+        quantity: item.quantity,
+        unitPriceMinor: item.unitPriceMinor,
+      })),
+  })));
+});
+
+router.post("/admin/cash-sales", requireAdmin, async (req, res): Promise<void> => {
+  const recipientName = typeof req.body?.recipientName === "string" ? req.body.recipientName.trim() : "";
+  const contact = typeof req.body?.contact === "string" ? req.body.contact.trim() : "";
+  const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 280) : "";
+  const lines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+  if (recipientName.length < 2) {
+    res.status(400).json({ error: "Enter the person's name." });
+    return;
+  }
+  const quantities = new Map<number, number>();
+  for (const line of lines) {
+    const variantId = Number(line?.variantId);
+    const quantity = Number(line?.quantity);
+    if (!Number.isInteger(variantId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+      res.status(400).json({ error: "Choose a fragrance and a quantity." });
+      return;
+    }
+    quantities.set(variantId, (quantities.get(variantId) ?? 0) + quantity);
+  }
+  if (quantities.size === 0) {
+    res.status(400).json({ error: "Choose at least one fragrance." });
+    return;
+  }
+  await syncSampleVariants();
+  try {
+    const order = await db.transaction(async (tx) => {
+      const variants = await tx
+        .select()
+        .from(productVariantsTable)
+        .where(inArray(productVariantsTable.id, [...quantities.keys()]));
+      if (variants.length !== quantities.size) throw new Error("One or more fragrances are no longer available.");
+      const products = await tx
+        .select()
+        .from(productsTable)
+        .where(and(
+          inArray(productsTable.id, [...new Set(variants.map((variant) => variant.productId))]),
+          eq(productsTable.status, "published"),
+        ));
+      const productById = new Map(products.map((product) => [product.id, product]));
+      let subtotalMinor = 0;
+      for (const variant of variants) {
+        const quantity = quantities.get(variant.id) ?? 0;
+        if (!productById.has(variant.productId) || variant.stock < quantity) {
+          throw new Error("One or more fragrances are out of stock.");
+        }
+        subtotalMinor += variant.priceMinor * quantity;
+      }
+      const requestId = randomUUID();
+      const orderNumber = `CASH-${Date.now().toString(36).toUpperCase()}`;
+      const [created] = await tx.insert(ordersTable).values({
+        orderNumber,
+        clerkUserId: getAuth(req).userId ?? null,
+        email: contact.includes("@") ? contact.toLowerCase() : "in-person@arvessofragrances.local",
+        recipientName,
+        address1: "Collected in person",
+        address2: note || null,
+        city: "In person",
+        postcode: "0000",
+        subtotalMinor,
+        discountMinor: 0,
+        shippingMinor: 0,
+        totalMinor: subtotalMinor,
+        currency: NZD,
+        paymentMethod: "cash",
+        status: "paid",
+        cancelTokenHash: createHash("sha256").update(requestId).digest("hex"),
+        requestId,
+        paidAt: new Date(),
+      }).returning();
+      for (const variant of variants) {
+        const quantity = quantities.get(variant.id) ?? 0;
+        const [reserved] = await tx
+          .update(productVariantsTable)
+          .set({ stock: sql`${productVariantsTable.stock} - ${quantity}` })
+          .where(and(eq(productVariantsTable.id, variant.id), gte(productVariantsTable.stock, quantity)))
+          .returning();
+        if (!reserved) throw new Error("Stock changed while recording this sale.");
+        const product = productById.get(variant.productId)!;
+        await tx.insert(orderItemsTable).values({
+          orderId: created.id,
+          variantId: variant.id,
+          productName: product.name,
+          brand: product.brand,
+          variantSize: variant.size,
+          sku: variant.sku,
+          quantity,
+          unitPriceMinor: variant.priceMinor,
+          unitCostMinor: variant.costMinor,
+        });
+        await tx.insert(inventoryMovementsTable).values({
+          variantId: variant.id,
+          delta: -quantity,
+          reason: `Cash sale ${created.orderNumber}`,
+          actorClerkId: getAuth(req).userId ?? null,
+          orderId: created.id,
+        });
+      }
+      return created;
+    });
+    res.status(201).json({ id: order.id, orderNumber: order.orderNumber, totalMinor: order.totalMinor });
+  } catch (error) {
+    req.log.warn({ error }, "Cash sale rejected");
+    res.status(400).json({ error: error instanceof Error ? error.message : "Could not record this cash sale." });
+  }
+});
+
 router.post("/checkout/quote", async (req, res): Promise<void> => {
+  await syncSampleVariants();
   const lines = Array.isArray(req.body?.lines) ? req.body.lines : null;
   if (!lines?.length) {
     res.status(400).json({ error: "Add a fragrance before using a code." });
@@ -924,6 +1109,7 @@ router.delete("/admin/discounts/:id", requireAdmin, async (req, res): Promise<vo
 });
 
 router.post("/checkout/paypal/order", async (req, res): Promise<void> => {
+  await syncSampleVariants();
   const parsed = CreatePayPalOrderBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });

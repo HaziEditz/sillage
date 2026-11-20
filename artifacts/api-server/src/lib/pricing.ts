@@ -1,3 +1,15 @@
+export const SAMPLE_PRICE_MINOR = 700;
+export const SAMPLE_SIZE = "2 ml";
+export const SAMPLE_AVAILABLE_STOCK = 25;
+
+export function sampleSku(productId: number) {
+  return `SAMPLE-${productId}`;
+}
+
+export function isSampleSku(sku: string) {
+  return sku.startsWith("SAMPLE-");
+}
+
 export const DISCOUNT_THRESHOLD_MINOR = 10_000;
 export const DISCOUNT_PERCENT = 10;
 export const FREE_SHIPPING_THRESHOLD_MINOR = 10_000;

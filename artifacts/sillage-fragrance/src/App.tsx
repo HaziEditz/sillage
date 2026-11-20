@@ -163,7 +163,7 @@ function Header({ cart }: { cart: CartApi }) {
   return <header className="header">
     <Link href="/" className="brand" data-testid="link-home"><span>Arvessó</span><span className="brand-descriptor">FRAGRANCES</span></Link>
     <nav className="nav-links" aria-label="Main navigation">
-      <Link href="/shop" data-testid="link-shop">Fragrance</Link><a href={`${basePath || ''}/#approach`}>Our approach</a><Link href="/account" data-testid="link-account-navigation">Account</Link>
+      <Link href="/shop" data-testid="link-shop">Fragrance</Link><Link href="/samples" data-testid="link-samples">Samples</Link><a href={`${basePath || ''}/#approach`}>Our approach</a><Link href="/account" data-testid="link-account-navigation">Account</Link>
       <Show when="signed-in"><AdminStudioLink label="Studio" testId="link-admin-navigation"/></Show>
     </nav>
     <div className="header-actions">
@@ -200,7 +200,7 @@ function AccountControls() {
 function Footer() {
   return <footer className="footer"><div className="wrap">
     <div className="footer-main"><div><Link href="/" className="brand"><span>Arvessó</span><span className="brand-descriptor">FRAGRANCES</span></Link><p>Independent fragrance, thoughtfully selected. From Aotearoa, for wherever you are.</p><a className="footer-social" href={STORE_INSTAGRAM} target="_blank" rel="noreferrer">Instagram</a></div>
-      <div className="footer-links"><div><span className="eyebrow">Explore</span><Link href="/shop">Fragrance</Link><a href={`${basePath || ''}/#approach`}>Our approach</a></div><div><span className="eyebrow">Help & information</span><Link href="/contact">Contact</Link><Link href="/shipping">Shipping</Link><Link href="/returns">Returns</Link><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/cart">Your bag</Link><Show when="signed-in"><Link href="/account">Account</Link><AdminStudioLink label="Store admin" testId="link-footer-store-admin"/></Show><Show when="signed-out"><Link href="/sign-in">Sign in</Link></Show></div></div></div>
+      <div className="footer-links"><div><span className="eyebrow">Explore</span><Link href="/shop">Fragrance</Link><Link href="/samples">Samples</Link><a href={`${basePath || ''}/#approach`}>Our approach</a></div><div><span className="eyebrow">Help & information</span><Link href="/contact">Contact</Link><Link href="/shipping">Shipping</Link><Link href="/returns">Returns</Link><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/cart">Your bag</Link><Show when="signed-in"><Link href="/account">Account</Link><AdminStudioLink label="Store admin" testId="link-footer-store-admin"/></Show><Show when="signed-out"><Link href="/sign-in">Sign in</Link></Show></div></div></div>
     <div className="footer-bottom"><span>© {new Date().getFullYear()} Arvessó Fragrances</span><span>Made for the considered everyday · Aotearoa New Zealand</span></div>
   </div></footer>;
 }
@@ -643,8 +643,11 @@ function ProductImage({ product, className = '' }: { product?: Product | null; c
   </div>;
 }
 
+const isSample = (variant: ProductVariant) => variant.sku.startsWith('SAMPLE-');
+const bottleVariants = (product: Product) => product.variants.filter((variant) => !isSample(variant));
+
 function ProductCard({ product }: { product: Product }) {
-  const cheapest = [...product.variants].sort((a, b) => a.priceMinor - b.priceMinor)[0];
+  const cheapest = [...bottleVariants(product)].sort((a, b) => a.priceMinor - b.priceMinor)[0];
   return <Link href={`/product/${product.slug}`} className="product-card" data-testid={`card-product-${product.id}`}>
     <ProductImage product={product}/>
     <div className="product-meta"><div><p className="product-brand">{product.brand}</p><h3 className="product-name">{product.name}</h3><p className="product-size">{product.scentFamily || product.audience}</p></div>
@@ -688,6 +691,19 @@ function ShopPage() {
   </main>;
 }
 
+function SamplesPage({ cart }: { cart: CartApi }) {
+  const { data, isLoading, isError, refetch } = useGetProducts({ page: 1, pageSize: 48, sort: 'name' });
+  const [added, setAdded] = useState<number | null>(null);
+  const samples = (data?.items ?? []).flatMap((product) => {
+    const sample = product.variants.find((variant) => isSample(variant));
+    const inStock = bottleVariants(product).some((variant) => variant.stock > 0) && (sample?.stock ?? 0) > 0;
+    return sample && inStock ? [{ product, sample }] : [];
+  });
+  return <main className="wrap"><div className="page-head"><span className="eyebrow">2 ml · $7</span><h1>Samples</h1><p>Every fragrance in stock is also available as a 2 ml sample for $7. The same scent, a smaller amount, so you can meet it before a full bottle.</p></div>
+    {isLoading ? <ProductSkeletons/> : isError ? <QueryError retry={() => void refetch()}/> : samples.length ? <div className="product-grid">{samples.map(({ product, sample }) => <article className="product-card" key={product.id} data-testid={`card-sample-${product.id}`}><ProductImage product={product}/><div className="product-meta"><div><p className="product-brand">{product.brand}</p><h3 className="product-name">{product.name}</h3><p className="product-size">2 ml sample</p></div><span className="product-price">{money(sample.priceMinor)}</span></div><button className="button button-small" style={{marginTop:16}} onClick={() => { cart.add(product, sample); setAdded(product.id); }} data-testid={`button-add-sample-${product.id}`}>{added === product.id ? 'Added to bag' : 'Add sample'}</button></article>)}</div> : <div className="empty-state"><div className="empty-mark"><Package size={20}/></div><h2>Samples follow the inventory</h2><p>When a fragrance is in stock, its 2 ml sample appears here for $7.</p></div>}
+  </main>;
+}
+
 function ProductPageView({ cart }: { cart: CartApi }) {
   const { slug = '' } = useParams<{slug:string}>();
   const { data: product, isLoading, isError, refetch } = useGetProduct(slug);
@@ -696,13 +712,16 @@ function ProductPageView({ cart }: { cart: CartApi }) {
   useEffect(()=>{ setSelected(null); setAdded(false); },[slug]);
   if (isLoading) return <main className="wrap detail-grid"><div className="skeleton loading-card"/><div className="skeleton" style={{height:400}}/></main>;
   if (isError || !product) return <main className="wrap" style={{padding:'60px 0'}}><QueryError retry={()=>void refetch()}/></main>;
-  const variant = product.variants.find((item)=>item.id === selected) || product.variants[0];
+  const bottles = bottleVariants(product);
+  const sample = product.variants.find((item) => isSample(item));
+  const variant = bottles.find((item)=>item.id === selected) || bottles[0];
   return <main className="wrap">
     <div style={{paddingTop:30}}><Link href="/shop" className="eyebrow"><ArrowLeft size={13}/> Back to fragrance</Link></div>
     <div className="detail-grid"><ProductImage product={product} className="detail-image"/><div className="detail-info"><span className="detail-brand">{product.brand}</span><h1>{product.name}</h1><p className="detail-description">{product.description}</p>
       <div className="detail-price">{variant ? money(variant.priceMinor) : 'Price unavailable'}</div>
-      <span className="eyebrow">Choose a size</span><div className="variant-list">{product.variants.map((item)=> <button key={item.id} onClick={()=>{setSelected(item.id);setAdded(false);}} className={`variant-option ${variant?.id===item.id?'selected':''}`} aria-pressed={variant?.id===item.id} data-testid={`button-variant-${item.id}`}>{item.size}</button>)}</div>
+      <span className="eyebrow">Choose a size</span><div className="variant-list">{bottles.map((item)=> <button key={item.id} onClick={()=>{setSelected(item.id);setAdded(false);}} className={`variant-option ${variant?.id===item.id?'selected':''}`} aria-pressed={variant?.id===item.id} data-testid={`button-variant-${item.id}`}>{item.size}</button>)}</div>
       <button className="button" disabled={!variant || variant.stock < 1} onClick={()=>{if(variant){cart.add(product,variant);setAdded(true);}}} data-testid="button-add-to-cart">{variant?.stock===0?'Currently unavailable':added?<><Check size={15}/> Added to bag</>:<>Add to bag <ArrowRight size={14}/></>}</button>
+      {sample && sample.stock > 0 && <button className="button button-outline" style={{marginTop:12}} onClick={()=>cart.add(product, sample)} data-testid="button-add-sample">Add a 2 ml sample · {money(sample.priceMinor)}</button>}
       {variant && variant.stock > 0 && variant.stock <= 3 && <p className="product-size">Only {variant.stock} remaining</p>}
       <div className="detail-notes"><div><span>Audience</span><strong>{product.audience}</strong></div>{product.concentration && <div><span>Concentration</span><strong>{product.concentration}</strong></div>}{product.scentFamily && <div><span>Scent family</span><strong>{product.scentFamily}</strong></div>}{product.notes?.length ? <div><span>Notes</span><strong>{product.notes.join(' · ')}</strong></div>:null}</div>
     </div></div>
@@ -1012,7 +1031,7 @@ function AccountSettingsPage() {
   return <main className="wrap account-settings-page"><div className="account-settings-heading"><Link className="text-link eyebrow" href="/account"><ArrowLeft size={13}/> Back to your account</Link><h1>Profile & security</h1></div><UserProfile routing="hash"/></main>;
 }
 
-const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders'],['/admin/discounts','Discounts']];
+const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders'],['/admin/cash','Cash'],['/admin/discounts','Discounts']];
 function AdminLayout({children}:{children:ReactNode}) {
   const [path]=useLocation();
   const {data:health,isLoading}=useHealthCheck({query:{queryKey:getHealthCheckQueryKey(),retry:1}});
@@ -1090,7 +1109,7 @@ function AdminProducts() {
   return <AdminLayout><div className="admin-top"><div><span className="eyebrow">Catalogue management</span><h1>Products</h1></div><button className="button button-small" onClick={()=>setEditing(null)} data-testid="button-new-product"><Plus size={14}/> Add fragrance</button></div>
     {deleteError&&<div className="notice error">{deleteError}</div>}
     {editing!==false&&<ProductEditor product={editing||undefined} onClose={()=>setEditing(false)}/>}
-    {isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:products?.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Fragrance</th><th>Variants</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead><tbody>{products.map(p=><tr key={p.id}><td><strong>{p.name}</strong><div className="product-size">{p.brand}</div></td><td>{p.variants.length}</td><td>{p.variants.reduce((sum,v)=>sum+v.stock,0)}</td><td><span className="status-pill">{p.status}</span></td><td><div className="admin-actions"><button className="button button-outline button-small" onClick={()=>setEditing(p)} data-testid={`button-edit-product-${p.id}`}>Edit</button><button className="button button-outline button-small" disabled={update.isPending} onClick={()=>update.mutate({id:p.id,data:{status:p.status==='published'?'draft':'published'}},{onSuccess:()=>{void qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});void qc.invalidateQueries({queryKey:getGetProductsQueryKey()});}})} data-testid={`button-toggle-publish-${p.id}`}>{p.status==='published'?'Unpublish':'Publish'}</button><button className="button button-outline button-small" disabled={deletingId===p.id} onClick={()=>void remove(p)} data-testid={`button-delete-product-${p.id}`}>{deletingId===p.id?'Deleting…':'Delete'}</button></div></td></tr>)}</tbody></table></div>:<EmptyCatalog admin/>}
+    {isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:products?.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Fragrance</th><th>Variants</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead><tbody>{products.map(p=><tr key={p.id}><td><strong>{p.name}</strong><div className="product-size">{p.brand}</div></td><td>{p.variants.length}</td><td>{p.variants.filter(v=>!v.sku.startsWith('SAMPLE-')).reduce((sum,v)=>sum+v.stock,0)}</td><td><span className="status-pill">{p.status}</span></td><td><div className="admin-actions"><button className="button button-outline button-small" onClick={()=>setEditing(p)} data-testid={`button-edit-product-${p.id}`}>Edit</button><button className="button button-outline button-small" disabled={update.isPending} onClick={()=>update.mutate({id:p.id,data:{status:p.status==='published'?'draft':'published'}},{onSuccess:()=>{void qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});void qc.invalidateQueries({queryKey:getGetProductsQueryKey()});}})} data-testid={`button-toggle-publish-${p.id}`}>{p.status==='published'?'Unpublish':'Publish'}</button><button className="button button-outline button-small" disabled={deletingId===p.id} onClick={()=>void remove(p)} data-testid={`button-delete-product-${p.id}`}>{deletingId===p.id?'Deleting…':'Delete'}</button></div></td></tr>)}</tbody></table></div>:<EmptyCatalog admin/>}
   </AdminLayout>;
 }
 
@@ -1099,7 +1118,7 @@ function AdminInventory() {
   const adjust=useAdjustInventory(); const qc=useQueryClient();
   const [draft,setDraft]=useState<Record<number,{delta:string;reason:string}>>({});
   const [message,setMessage]=useState('');
-  const variants=products?.flatMap(p=>p.variants.map(v=>({product:p,variant:v})))||[];
+  const variants=products?.flatMap(p=>p.variants.filter(v=>!v.sku.startsWith('SAMPLE-')).map(v=>({product:p,variant:v})))||[];
   const change=(id:number,key:'delta'|'reason',value:string)=>setDraft(old=>({...old,[id]:{delta:old[id]?.delta||'',reason:old[id]?.reason||'', [key]:value}}));
   const submit=(id:number)=>{const item=draft[id];if(!item||Number(item.delta)===0||item.reason.trim().length<3){setMessage('Enter a non-zero adjustment and a reason of at least three characters.');return;}setMessage('');adjust.mutate({data:{variantId:id,delta:Number(item.delta),reason:item.reason}},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetAdminDashboardQueryKey()});setDraft(o=>({...o,[id]:{delta:'',reason:''}}));setMessage('Stock adjustment recorded.');},onError:()=>setMessage('Stock could not be adjusted. Please check the amount and try again.')});};
   return <AdminLayout><div className="admin-top"><div><span className="eyebrow">Stock ledger</span><h1>Inventory</h1></div></div>{message&&<div className="notice">{message}</div>}{isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:variants.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Product / size</th><th>SKU</th><th>On hand</th><th>Adjust stock</th></tr></thead><tbody>{variants.map(({product,variant})=><tr key={variant.id}><td><strong>{product.name}</strong><div className="product-size">{variant.size}</div></td><td>{variant.sku}</td><td><span className={variant.stock<=3?'status-pill':''}>{variant.stock}</span></td><td><div className="admin-actions"><input className="field" style={{width:76}} type="number" value={draft[variant.id]?.delta||''} onChange={e=>change(variant.id,'delta',e.target.value)} placeholder="+ / −" aria-label={`Stock delta ${variant.id}`} data-testid={`input-stock-delta-${variant.id}`}/><input className="field" style={{width:170}} value={draft[variant.id]?.reason||''} onChange={e=>change(variant.id,'reason',e.target.value)} placeholder="Adjustment reason" aria-label={`Reason ${variant.id}`} data-testid={`input-stock-reason-${variant.id}`}/><button className="button button-outline button-small" disabled={adjust.isPending} onClick={()=>submit(variant.id)} data-testid={`button-adjust-stock-${variant.id}`}>Apply</button></div></td></tr>)}</tbody></table></div>:<EmptyCatalog admin/>}</AdminLayout>;
@@ -1221,10 +1240,62 @@ function AdminDiscounts() {
   </AdminLayout>;
 }
 
+type CashSale = { id: number; orderNumber: string; recipientName: string; contact: string; note: string; totalMinor: number; createdAt: string; items: { name: string; size: string; quantity: number; unitPriceMinor: number }[] };
+
+function AdminCash() {
+  const { data: products, isLoading } = useGetAdminProducts({ query: { queryKey: getGetAdminProductsQueryKey() } });
+  const [form, setForm] = useState({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
+  const [sales, setSales] = useState<CashSale[]>([]);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const options = (products ?? []).filter((product) => product.status === 'published').flatMap((product) => product.variants.filter((variant) => variant.stock > 0).map((variant) => ({ id: variant.id, label: `${product.brand} ${product.name} · ${variant.sku.startsWith('SAMPLE-') ? '2 ml sample' : variant.size} · ${money(variant.priceMinor)}`, stock: variant.stock })));
+  const load = async () => {
+    const response = await fetch('/api/admin/cash-sales', { credentials: 'include' });
+    const body: unknown = await response.json().catch(() => null);
+    if (response.ok && Array.isArray(body)) setSales(body as CashSale[]);
+  };
+  useEffect(() => { void load(); }, []);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    const response = await fetch('/api/admin/cash-sales', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipientName: form.recipientName, contact: form.contact, note: form.note, lines: [{ variantId: Number(form.variantId), quantity: Number(form.quantity) }] }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      const text = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not record this cash sale.';
+      setError(text);
+      return;
+    }
+    setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
+    setMessage('Cash sale recorded. It is marked paid and the stock has been reduced.');
+    await load();
+  };
+  return <AdminLayout>
+    <div className="admin-top"><div><span className="eyebrow">In person</span><h1>Cash sales</h1></div></div>
+    <p className="product-size" style={{marginTop:0}}>When someone pays you in cash at a meetup, record it here. It shows as a paid order, with no PayPal charge, and the bottle or sample leaves the inventory.</p>
+    {error && <div className="notice error">{error}</div>}
+    {message && <div className="notice">{message}</div>}
+    <form className="admin-form" onSubmit={(event) => void submit(event)}>
+      <label>Name<input required className="field" value={form.recipientName} onChange={(e) => setForm({ ...form, recipientName: e.target.value })} data-testid="input-cash-name"/></label>
+      <label>Phone or email<input className="field" value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} placeholder="Optional"/></label>
+      <label className="wide">What they took<select required className="select" value={form.variantId} onChange={(e) => setForm({ ...form, variantId: e.target.value })} data-testid="select-cash-item"><option value="">Choose a fragrance</option>{options.map((option) => <option key={option.id} value={option.id}>{option.label} · {option.stock} on hand</option>)}</select></label>
+      <label>Quantity<input className="field" type="number" min="1" max="10" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })}/></label>
+      <label className="wide">Note<textarea className="textarea" rows={3} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="Where you met, or anything you want to remember"/></label>
+      <div className="wide"><button className="button button-small" disabled={isLoading} data-testid="button-record-cash">Record cash payment</button></div>
+    </form>
+    {sales.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>When</th><th>Person</th><th>Items</th><th>Total</th></tr></thead><tbody>{sales.map((sale) => <tr key={sale.id}><td>{new Date(sale.createdAt).toLocaleDateString('en-NZ')}<div className="product-size">{sale.orderNumber}</div></td><td><strong>{sale.recipientName}</strong>{sale.contact && <div className="product-size">{sale.contact}</div>}{sale.note && <div className="product-size">{sale.note}</div>}</td><td>{sale.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</td><td>{money(sale.totalMinor)}</td></tr>)}</tbody></table></div> : <EmptyAdmin message="No cash sales recorded yet."/>}
+  </AdminLayout>;
+}
+
 function Router({cart}:{cart:CartApi}) {
   const [location]=useLocation();
   return <ErrorBoundary resetKey={location}><Shell cart={cart}><Switch>
-    <Route path="/" component={HomeRedirect}/><Route path="/shop" component={ShopPage}/>
+    <Route path="/" component={HomeRedirect}/><Route path="/shop" component={ShopPage}/><Route path="/samples"><SamplesPage cart={cart}/></Route>
     <Route path="/product/:slug"><ProductPageView cart={cart}/></Route>
     <Route path="/cart"><CartPage cart={cart}/></Route><Route path="/checkout"><CheckoutPage cart={cart}/></Route>
     <Route path="/order-confirmation/:id"><ConfirmationPage cart={cart}/></Route>
@@ -1235,7 +1306,7 @@ function Router({cart}:{cart:CartApi}) {
     <Route path="/terms"><StoreInfoPage page="terms"/></Route>
     <Route path="/account/settings"><AccountSettingsPage/></Route><Route path="/account"><AccountPage/></Route>
     <Route path="/sign-in/*?" component={SignInPage}/><Route path="/sign-up/*?" component={SignUpPage}/>
-    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route><Route path="/admin/discounts"><AdminDiscounts/></Route>
+    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route><Route path="/admin/cash"><AdminCash/></Route><Route path="/admin/discounts"><AdminDiscounts/></Route>
     <Route><main className="wrap" style={{padding:'100px 0'}}><span className="eyebrow">404 · Not found</span><h1 className="section-heading">This page has drifted.</h1><Link className="button" href="/">Return home</Link></main></Route>
   </Switch></Shell></ErrorBoundary>;
 }

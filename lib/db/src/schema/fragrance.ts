@@ -85,6 +85,7 @@ export const ordersTable = pgTable(
     shippingMinor: integer("shipping_minor").notNull().default(0),
     totalMinor: integer("total_minor").notNull(),
     currency: text("currency").notNull().default("NZD"),
+    paymentMethod: text("payment_method").notNull().default("paypal"),
     status: text("status").notNull().default("pending"),
     paypalOrderId: text("paypal_order_id"),
     paypalApprovalUrl: text("paypal_approval_url"),
