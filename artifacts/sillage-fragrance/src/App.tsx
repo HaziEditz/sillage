@@ -7,7 +7,7 @@ import { shadcn } from '@clerk/themes';
 import {
   ArrowLeft, ArrowRight, Check, CircleHelp, Instagram, ZoomIn,
   KeyRound, LoaderCircle, LogOut, Menu, Minus, Package, PackageCheck, Plus, Search, ShieldCheck, ShoppingBag,
-  Trash2, Truck, UserRound, X,
+  ThumbsDown, ThumbsUp, Trash2, Truck, UserRound, X,
 } from 'lucide-react';
 import {
   getGetAdminDashboardQueryKey, getGetAdminOrdersQueryKey, getGetAdminProductsQueryKey,
@@ -818,7 +818,93 @@ function ProductPageView({ cart }: { cart: CartApi }) {
       {variant && variant.stock > 0 && variant.stock <= 3 && <p className="product-size">Only {variant.stock} remaining</p>}
       <div className="detail-notes"><div><span>Audience</span><strong>{product.audience}</strong></div>{product.concentration && <div><span>Concentration</span><strong>{product.concentration}</strong></div>}{product.scentFamily && <div><span>Scent family</span><strong>{product.scentFamily}</strong></div>}{product.notes?.length ? <div><span>Notes</span><strong>{product.notes.join(' · ')}</strong></div>:null}</div>
     </div></div>
+    <ProductFeedback key={product.slug} slug={product.slug}/>
   </main>;
+}
+
+type FragranceFeedback = {
+  likes: number;
+  dislikes: number;
+  mine: 'like' | 'dislike' | null;
+  reviews: { id: number; authorName: string; body: string; createdAt: string; mine: boolean }[];
+};
+
+function ProductFeedback({ slug }: { slug: string }) {
+  const { isLoaded, isSignedIn } = useUser();
+  const isAdmin = useAdminAccess();
+  const [feedback, setFeedback] = useState<FragranceFeedback | null>(null);
+  const [text, setText] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const load = async (fillText: boolean) => {
+    const response = await fetch(`/api/products/${encodeURIComponent(slug)}/feedback`, { credentials: 'include' });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok || !body || typeof body !== 'object' || !('reviews' in body) || !Array.isArray(body.reviews)) return;
+    const data = body as FragranceFeedback;
+    setFeedback(data);
+    if (fillText) setText(data.reviews.find((review) => review.mine)?.body ?? '');
+  };
+  useEffect(() => { void load(true); }, [slug]);
+  const vote = async (choice: 'like' | 'dislike') => {
+    setError('');
+    setMessage('');
+    if (!isSignedIn) return;
+    const response = await fetch(`/api/products/${encodeURIComponent(slug)}/reaction`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vote: choice }),
+    });
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not save that.');
+      return;
+    }
+    await load(false);
+  };
+  const saveReview = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    const response = await fetch(`/api/products/${encodeURIComponent(slug)}/reviews`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: text }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not save your review.');
+      return;
+    }
+    setMessage('Review saved.');
+    await load(true);
+  };
+  const removeReview = async (id: number) => {
+    const response = await fetch(`/api/admin/reviews/${id}`, { method: 'DELETE', credentials: 'include' });
+    if (!response.ok) {
+      setError('Could not remove that review.');
+      return;
+    }
+    await load(true);
+  };
+  const mine = feedback?.reviews.some((review) => review.mine);
+  return <section className="feedback">
+    <div className="section-top"><div><span className="eyebrow">From people who tried it</span><h2 className="section-heading" style={{fontSize:42}}>Reviews</h2></div>
+      <div className="reaction-row">
+        <button type="button" className={`reaction ${feedback?.mine === 'like' ? 'selected' : ''}`} disabled={!isLoaded || !isSignedIn} onClick={() => void vote('like')} data-testid="button-like"><ThumbsUp size={14}/> {feedback?.likes ?? 0}</button>
+        <button type="button" className={`reaction ${feedback?.mine === 'dislike' ? 'selected' : ''}`} disabled={!isLoaded || !isSignedIn} onClick={() => void vote('dislike')} data-testid="button-dislike"><ThumbsDown size={14}/> {feedback?.dislikes ?? 0}</button>
+      </div>
+    </div>
+    {isLoaded && !isSignedIn && <p className="product-size">Sign in to like, dislike, or leave a review. <Link href="/sign-in">Sign in</Link></p>}
+    {error && <div className="notice error">{error}</div>}
+    {message && <div className="notice">{message}</div>}
+    {isSignedIn && <form className="review-form" onSubmit={(event) => void saveReview(event)}>
+      <label className="wide">{mine ? 'Update your review' : 'Your review'}<textarea className="textarea" rows={4} maxLength={600} value={text} onChange={(event) => setText(event.target.value)} placeholder="How did it wear, and who would you recommend it to?" data-testid="input-review"/></label>
+      <button className="button button-small" data-testid="button-save-review">{mine ? 'Update review' : 'Post review'}</button>
+    </form>}
+    {feedback?.reviews.length ? <div className="review-list">{feedback.reviews.map((review) => <article className="review" key={review.id}><div><strong>{review.authorName}</strong>{review.mine && <span className="product-size"> · You</span>}<div className="product-size">{new Date(review.createdAt).toLocaleDateString('en-NZ')}</div></div><p>{review.body}</p>{isAdmin && <button type="button" className="button button-outline button-small" onClick={() => void removeReview(review.id)}>Remove</button>}</article>)}</div> : <p className="product-size">No reviews yet.</p>}
+  </section>;
 }
 
 function CartPage({ cart }: {cart:CartApi}) {

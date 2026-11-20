@@ -199,6 +199,14 @@ button { cursor: pointer; }
 .detail-info .button { width:min(100%,390px); }
 .detail-notes { border-top:1px solid #d8d3ca; margin-top:40px; padding-top:24px; display:grid; gap:12px; font-size:12px; }
 .detail-notes span { color:#77736b; }
+.feedback { border-top:1px solid #d8d3ca; padding:48px 0 90px; }
+.reaction-row { display:flex; gap:8px; }
+.reaction { border:1px solid #d0cbc1; background:transparent; padding:10px 14px; display:inline-flex; align-items:center; gap:8px; font-size:12px; }
+.reaction.selected { background:#292723; color:#f6f2e9; border-color:#292723; }
+.reaction:disabled { opacity:.55; }
+.review-form { display:grid; gap:12px; max-width:640px; margin:22px 0 28px; }
+.review { border-top:1px solid #e4dfd6; padding:18px 0; display:grid; gap:8px; }
+.review p { margin:0; font-size:13px; line-height:1.7; color:#514e47; max-width:680px; }
 .cart-layout { display:grid; grid-template-columns:1fr 340px; gap:70px; padding:24px 0 90px; }
 .cart-line { display:grid; grid-template-columns:100px 1fr auto; gap:20px; padding:22px 0; border-bottom:1px solid #d8d3ca; }
 .cart-line .product-art { aspect-ratio:1; }

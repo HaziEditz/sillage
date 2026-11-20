@@ -187,6 +187,53 @@ export const inventoryMovementsTable = pgTable(
   ],
 );
 
+export const productReactionsTable = pgTable(
+  "fragrance_reactions",
+  {
+    id: serial("id").primaryKey(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => productsTable.id, { onDelete: "cascade" }),
+    clerkUserId: text("clerk_user_id").notNull(),
+    vote: text("vote").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("fragrance_reactions_user_product_idx").on(
+      table.productId,
+      table.clerkUserId,
+    ),
+  ],
+);
+
+export const productReviewsTable = pgTable(
+  "fragrance_reviews",
+  {
+    id: serial("id").primaryKey(),
+    productId: integer("product_id")
+      .notNull()
+      .references(() => productsTable.id, { onDelete: "cascade" }),
+    clerkUserId: text("clerk_user_id").notNull(),
+    authorName: text("author_name").notNull(),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("fragrance_reviews_user_product_idx").on(
+      table.productId,
+      table.clerkUserId,
+    ),
+    index("fragrance_reviews_product_idx").on(table.productId),
+  ],
+);
+
 export const insertProductSchema = createInsertSchema(productsTable).omit({
   id: true,
   createdAt: true,

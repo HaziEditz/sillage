@@ -5,7 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
-import { getAuth } from "@clerk/express";
+import { clerkClient, getAuth } from "@clerk/express";
 import {
   and,
   asc,
@@ -49,6 +49,8 @@ import {
   inventoryMovementsTable,
   orderItemsTable,
   ordersTable,
+  productReactionsTable,
+  productReviewsTable,
   productVariantsTable,
   productsTable,
   storeSettingsTable,
@@ -653,6 +655,118 @@ router.get("/products/:slug", async (req, res): Promise<void> => {
   }
   const product = (await productResults([row]))[0];
   res.json(GetProductResponse.parse(product));
+});
+
+async function publishedProduct(slug: string) {
+  const [row] = await db
+    .select()
+    .from(productsTable)
+    .where(and(eq(productsTable.slug, slug), eq(productsTable.status, "published")))
+    .limit(1);
+  return row ?? null;
+}
+
+async function reviewerName(userId: string) {
+  const user = await clerkClient.users.getUser(userId);
+  const name = [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
+  return name.slice(0, 80) || "Customer";
+}
+
+router.get("/products/:slug/feedback", async (req, res): Promise<void> => {
+  const product = await publishedProduct(String(req.params.slug));
+  if (!product) {
+    res.status(404).json({ error: "Fragrance not found." });
+    return;
+  }
+  const userId = getAuth(req).userId;
+  const [reactions, reviews] = await Promise.all([
+    db.select().from(productReactionsTable).where(eq(productReactionsTable.productId, product.id)),
+    db.select().from(productReviewsTable).where(eq(productReviewsTable.productId, product.id)).orderBy(desc(productReviewsTable.createdAt)).limit(40),
+  ]);
+  res.json({
+    likes: reactions.filter((reaction) => reaction.vote === "like").length,
+    dislikes: reactions.filter((reaction) => reaction.vote === "dislike").length,
+    mine: reactions.find((reaction) => reaction.clerkUserId === userId)?.vote ?? null,
+    reviews: reviews.map((review) => ({
+      id: review.id,
+      authorName: review.authorName,
+      body: review.body,
+      createdAt: review.createdAt,
+      mine: review.clerkUserId === userId,
+    })),
+  });
+});
+
+router.post("/products/:slug/reaction", async (req, res): Promise<void> => {
+  const userId = getAuth(req).userId;
+  if (!userId) {
+    res.status(401).json({ error: "Sign in to like or dislike a fragrance." });
+    return;
+  }
+  const vote = req.body?.vote === "like" || req.body?.vote === "dislike" ? req.body.vote : null;
+  if (!vote) {
+    res.status(400).json({ error: "Choose like or dislike." });
+    return;
+  }
+  const product = await publishedProduct(String(req.params.slug));
+  if (!product) {
+    res.status(404).json({ error: "Fragrance not found." });
+    return;
+  }
+  const [existing] = await db
+    .select()
+    .from(productReactionsTable)
+    .where(and(eq(productReactionsTable.productId, product.id), eq(productReactionsTable.clerkUserId, userId)))
+    .limit(1);
+  if (existing?.vote === vote) {
+    await db.delete(productReactionsTable).where(eq(productReactionsTable.id, existing.id));
+  } else if (existing) {
+    await db.update(productReactionsTable).set({ vote }).where(eq(productReactionsTable.id, existing.id));
+  } else {
+    await db.insert(productReactionsTable).values({ productId: product.id, clerkUserId: userId, vote });
+  }
+  res.status(204).end();
+});
+
+router.post("/products/:slug/reviews", async (req, res): Promise<void> => {
+  const userId = getAuth(req).userId;
+  if (!userId) {
+    res.status(401).json({ error: "Sign in to leave a review." });
+    return;
+  }
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  if (body.length < 8 || body.length > 600) {
+    res.status(400).json({ error: "Write a review between 8 and 600 characters." });
+    return;
+  }
+  const product = await publishedProduct(String(req.params.slug));
+  if (!product) {
+    res.status(404).json({ error: "Fragrance not found." });
+    return;
+  }
+  const authorName = await reviewerName(userId);
+  await db
+    .insert(productReviewsTable)
+    .values({ productId: product.id, clerkUserId: userId, authorName, body })
+    .onConflictDoUpdate({
+      target: [productReviewsTable.productId, productReviewsTable.clerkUserId],
+      set: { body, authorName, updatedAt: new Date() },
+    });
+  res.status(201).json({ ok: true });
+});
+
+router.delete("/admin/reviews/:id", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Choose a review to remove." });
+    return;
+  }
+  const [row] = await db.delete(productReviewsTable).where(eq(productReviewsTable.id, id)).returning({ id: productReviewsTable.id });
+  if (!row) {
+    res.status(404).json({ error: "Review not found." });
+    return;
+  }
+  res.status(204).end();
 });
 
 router.get("/admin/dashboard", requireAdmin, async (req, res): Promise<void> => {
