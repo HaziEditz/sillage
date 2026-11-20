@@ -234,6 +234,22 @@ export const productReviewsTable = pgTable(
   ],
 );
 
+export const customerMessagesTable = pgTable(
+  "fragrance_messages",
+  {
+    id: serial("id").primaryKey(),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    email: text("email").notNull(),
+    topic: text("topic"),
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index("fragrance_messages_kind_idx").on(table.kind, table.createdAt)],
+);
+
 export const insertProductSchema = createInsertSchema(productsTable).omit({
   id: true,
   createdAt: true,

@@ -201,7 +201,7 @@ function AccountControls() {
 function Footer() {
   return <footer className="footer"><div className="wrap">
     <div className="footer-main"><div><Link href="/" className="brand"><span>Arvessó</span><span className="brand-descriptor">FRAGRANCES</span></Link><p>Independent fragrance, thoughtfully selected. From Aotearoa, for wherever you are.</p><a className="footer-social" href={STORE_INSTAGRAM} target="_blank" rel="noreferrer">Instagram</a></div>
-      <div className="footer-links"><div><span className="eyebrow">Explore</span><Link href="/shop">Fragrance</Link><Link href="/samples">Samples</Link><a href={`${basePath || ''}/#approach`}>Our approach</a></div><div><span className="eyebrow">Help & information</span><Link href="/contact">Contact</Link><Link href="/shipping">Shipping</Link><Link href="/returns">Returns</Link><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/cart">Your bag</Link><Show when="signed-in"><Link href="/account">Account</Link><AdminStudioLink label="Store admin" testId="link-footer-store-admin"/></Show><Show when="signed-out"><Link href="/sign-in">Sign in</Link></Show></div></div></div>
+      <div className="footer-links"><div><span className="eyebrow">Explore</span><Link href="/shop">Fragrance</Link><Link href="/samples">Samples</Link><Link href="/requests">Requests</Link><a href={`${basePath || ''}/#approach`}>Our approach</a></div><div><span className="eyebrow">Help & information</span><Link href="/contact">Contact</Link><Link href="/report">Report a problem</Link><Link href="/shipping">Shipping</Link><Link href="/returns">Returns</Link><Link href="/privacy">Privacy</Link><Link href="/terms">Terms</Link><Link href="/cart">Your bag</Link><Show when="signed-in"><Link href="/account">Account</Link><AdminStudioLink label="Store admin" testId="link-footer-store-admin"/></Show><Show when="signed-out"><Link href="/sign-in">Sign in</Link></Show></div></div></div>
     <div className="footer-bottom"><span>© {new Date().getFullYear()} Arvessó Fragrances</span><span>Made for the considered everyday · Aotearoa New Zealand</span></div>
   </div></footer>;
 }
@@ -238,6 +238,8 @@ const storeInfoPages: Record<StoreInfoPageKey, {
     sections: [
       { title: 'Email', blocks: [{ kind: 'lines', items: [{ label: 'Email', value: STORE_EMAIL, href: `mailto:${STORE_EMAIL}` }] }] },
       { title: 'Instagram', blocks: [{ kind: 'lines', items: [{ label: 'Instagram', value: '@arvesso_fragrances', href: STORE_INSTAGRAM, external: true }] }] },
+      { title: 'Requests and ideas', blocks: [{ kind: 'p', parts: ['Tell us about a fragrance you want to buy, an idea, or a suggestion for the shop. ', { label: 'Send a request', href: '/requests' }] }] },
+      { title: 'Report a problem', blocks: [{ kind: 'p', parts: ['Reports are sent to ', { label: STORE_EMAIL, href: `mailto:${STORE_EMAIL}`, external: true }, '. ', { label: 'Send a report', href: '/report' }] }] },
     ],
   },
   shipping: {
@@ -1210,7 +1212,7 @@ function AccountSettingsPage() {
   return <main className="wrap account-settings-page"><div className="account-settings-heading"><Link className="text-link eyebrow" href="/account"><ArrowLeft size={13}/> Back to your account</Link><h1>Profile & security</h1></div><UserProfile routing="hash"/></main>;
 }
 
-const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders'],['/admin/cash','Cash'],['/admin/delivery','Delivery'],['/admin/discounts','Discounts']];
+const adminRoutes=[['/admin','Overview'],['/admin/products','Products'],['/admin/inventory','Inventory'],['/admin/orders','Orders'],['/admin/cash','Cash'],['/admin/delivery','Delivery'],['/admin/inbox','Inbox'],['/admin/discounts','Discounts']];
 function AdminLayout({children}:{children:ReactNode}) {
   const [path]=useLocation();
   const {data:health,isLoading}=useHealthCheck({query:{queryKey:getHealthCheckQueryKey(),retry:1}});
@@ -1555,6 +1557,84 @@ function AdminDelivery() {
   </AdminLayout>;
 }
 
+const messageKinds: Record<string, string> = { suggestion: 'Suggestion', idea: 'Idea', purchase: 'Fragrance request', report: 'Report' };
+
+function CustomerMessagePage({ mode }: { mode: 'request' | 'report' }) {
+  const { isLoaded, user } = useUser();
+  const [form, setForm] = useState({ kind: mode === 'report' ? 'report' : 'purchase', name: '', email: '', topic: 'An order', body: '' });
+  const [filled, setFilled] = useState(false);
+  const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    if (!isLoaded || filled) return;
+    setForm((current) => ({
+      ...current,
+      name: user?.fullName || current.name,
+      email: user?.primaryEmailAddress?.emailAddress || current.email,
+    }));
+    setFilled(true);
+  }, [filled, isLoaded, user]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    const response = await fetch('/api/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mode === 'report' ? form : { ...form, topic: '' }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not send that.');
+      return;
+    }
+    setSent(true);
+    if (mode === 'report') {
+      const subject = encodeURIComponent(`Arvessó report${form.topic ? `: ${form.topic}` : ''}`);
+      const mailBody = encodeURIComponent(`${form.name}\n${form.email}\n\n${form.body}`);
+      window.location.href = `mailto:${STORE_EMAIL}?subject=${subject}&body=${mailBody}`;
+    }
+  };
+  return <main className="wrap"><div className="page-head"><span className="eyebrow">{mode === 'report' ? 'Customer report' : 'For the shop'}</span><h1>{mode === 'report' ? 'Report a problem' : 'Requests and ideas'}</h1><p>{mode === 'report' ? `Tell us what happened. This opens an email to ${STORE_EMAIL}, and a copy is kept in the studio.` : 'Ask for a fragrance you want to buy, share an idea, or leave a suggestion.'}</p></div>
+    {sent ? <div className="notice">{mode === 'report' ? `If your email app opened, send that message to ${STORE_EMAIL}. A copy is already in the studio.` : 'Saved. We will read it in the studio.'}</div> : <form className="admin-form" onSubmit={(event) => void submit(event)}>
+      {error && <div className="notice error wide">{error}</div>}
+      {mode === 'request' ? <label>What is this<select className="select" value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })} data-testid="select-message-kind"><option value="purchase">A fragrance I want to buy</option><option value="idea">An idea</option><option value="suggestion">A suggestion</option></select></label> : <label>What it is about<select className="select" value={form.topic} onChange={(event) => setForm({ ...form, topic: event.target.value })}><option>An order</option><option>A product</option><option>The website</option><option>Something else</option></select></label>}
+      <label>Name<input required className="field" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} data-testid="input-message-name"/></label>
+      <label>Email<input required type="email" className="field" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} data-testid="input-message-email"/></label>
+      <label className="wide">{mode === 'report' ? 'What happened' : 'Your message'}<textarea required className="textarea" rows={5} maxLength={1000} value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} data-testid="input-message-body"/></label>
+      <div className="wide"><button className="button button-small" data-testid="button-send-message">{mode === 'report' ? 'Send report' : 'Send'}</button></div>
+    </form>}
+  </main>;
+}
+
+type CustomerMessage = { id: number; kind: string; name: string; email: string; topic: string | null; body: string; createdAt: string };
+
+function AdminInbox() {
+  const [rows, setRows] = useState<CustomerMessage[]>([]);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    void (async () => {
+      const response = await fetch('/api/admin/messages', { credentials: 'include' });
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok || !Array.isArray(body)) {
+        setError('Could not load messages.');
+        return;
+      }
+      setRows(body as CustomerMessage[]);
+    })();
+  }, []);
+  const requests = rows.filter((row) => row.kind !== 'report');
+  const reports = rows.filter((row) => row.kind === 'report');
+  const table = (items: CustomerMessage[]) => items.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>When</th><th>From</th><th>Message</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{new Date(item.createdAt).toLocaleDateString('en-NZ')}<div className="product-size">{messageKinds[item.kind] || item.kind}{item.topic ? ` · ${item.topic}` : ''}</div></td><td><strong>{item.name}</strong><div className="product-size">{item.email}</div></td><td>{item.body}</td></tr>)}</tbody></table></div> : <EmptyAdmin message="Nothing here yet."/>;
+  return <AdminLayout>
+    <div className="admin-top"><div><span className="eyebrow">From customers</span><h1>Inbox</h1></div></div>
+    {error && <div className="notice error">{error}</div>}
+    <div className="section-top"><div><span className="eyebrow">Reports</span><h2 className="section-heading" style={{fontSize:34}}>Sent to the store email</h2></div></div>
+    {table(reports)}
+    <div className="section-top"><div><span className="eyebrow">Requests</span><h2 className="section-heading" style={{fontSize:34}}>Ideas and fragrances they want</h2></div></div>
+    {table(requests)}
+  </AdminLayout>;
+}
+
 function Router({cart}:{cart:CartApi}) {
   const [location]=useLocation();
   return <ErrorBoundary resetKey={location}><Shell cart={cart}><Switch>
@@ -1563,13 +1643,15 @@ function Router({cart}:{cart:CartApi}) {
     <Route path="/cart"><CartPage cart={cart}/></Route><Route path="/checkout"><CheckoutPage cart={cart}/></Route>
     <Route path="/order-confirmation/:id"><ConfirmationPage cart={cart}/></Route>
     <Route path="/contact"><StoreInfoPage page="contact"/></Route>
+    <Route path="/requests"><CustomerMessagePage mode="request"/></Route>
+    <Route path="/report"><CustomerMessagePage mode="report"/></Route>
     <Route path="/shipping"><StoreInfoPage page="shipping"/></Route>
     <Route path="/returns"><StoreInfoPage page="returns"/></Route>
     <Route path="/privacy"><StoreInfoPage page="privacy"/></Route>
     <Route path="/terms"><StoreInfoPage page="terms"/></Route>
     <Route path="/account/settings"><AccountSettingsPage/></Route><Route path="/account"><AccountPage/></Route>
     <Route path="/sign-in/*?" component={SignInPage}/><Route path="/sign-up/*?" component={SignUpPage}/>
-    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route><Route path="/admin/cash"><AdminCash/></Route><Route path="/admin/delivery"><AdminDelivery/></Route><Route path="/admin/discounts"><AdminDiscounts/></Route>
+    <Route path="/admin"><AdminOverview/></Route><Route path="/admin/products"><AdminProducts/></Route><Route path="/admin/inventory"><AdminInventory/></Route><Route path="/admin/orders"><AdminOrders/></Route><Route path="/admin/cash"><AdminCash/></Route><Route path="/admin/delivery"><AdminDelivery/></Route><Route path="/admin/inbox"><AdminInbox/></Route><Route path="/admin/discounts"><AdminDiscounts/></Route>
     <Route><main className="wrap" style={{padding:'100px 0'}}><span className="eyebrow">404 · Not found</span><h1 className="section-heading">This page has drifted.</h1><Link className="button" href="/">Return home</Link></main></Route>
   </Switch></Shell></ErrorBoundary>;
 }

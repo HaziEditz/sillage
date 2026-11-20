@@ -48,6 +48,7 @@ import {
   discountCodesTable,
   inventoryMovementsTable,
   orderItemsTable,
+  customerMessagesTable,
   ordersTable,
   productReactionsTable,
   productReviewsTable,
@@ -753,6 +754,45 @@ router.post("/products/:slug/reviews", async (req, res): Promise<void> => {
       set: { body, authorName, updatedAt: new Date() },
     });
   res.status(201).json({ ok: true });
+});
+
+const MESSAGE_KINDS = new Set(["suggestion", "idea", "purchase", "report"]);
+
+router.post("/messages", async (req, res): Promise<void> => {
+  const kind = typeof req.body?.kind === "string" ? req.body.kind : "";
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+  const topic = typeof req.body?.topic === "string" ? req.body.topic.trim().slice(0, 80) : "";
+  const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+  if (!MESSAGE_KINDS.has(kind)) {
+    res.status(400).json({ error: "Choose what this message is about." });
+    return;
+  }
+  if (name.length < 2 || name.length > 80) {
+    res.status(400).json({ error: "Enter your name." });
+    return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 160) {
+    res.status(400).json({ error: "Enter an email address we can reply to." });
+    return;
+  }
+  if (body.length < 8 || body.length > 1000) {
+    res.status(400).json({ error: "Write between 8 and 1000 characters." });
+    return;
+  }
+  const [created] = await db.insert(customerMessagesTable).values({
+    kind,
+    name,
+    email,
+    topic: topic || null,
+    body,
+  }).returning({ id: customerMessagesTable.id });
+  res.status(201).json({ id: created.id });
+});
+
+router.get("/admin/messages", requireAdmin, async (_req, res): Promise<void> => {
+  const rows = await db.select().from(customerMessagesTable).orderBy(desc(customerMessagesTable.createdAt)).limit(80);
+  res.json(rows);
 });
 
 router.delete("/admin/reviews/:id", requireAdmin, async (req, res): Promise<void> => {
