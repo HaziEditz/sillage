@@ -17,6 +17,7 @@ import {
   inArray,
   min,
   ne,
+  not,
   or,
   sql,
   sum,
@@ -537,7 +538,7 @@ router.get("/products", async (req, res): Promise<void> => {
   const { q, brand, audience, sort, page = 1, pageSize = 12 } = params.data;
   const conditions = [eq(productsTable.status, "published")];
   if (brand) conditions.push(eq(productsTable.brand, brand));
-  if (audience) conditions.push(eq(productsTable.audience, audience));
+  if (audience) conditions.push(sql`lower(${productsTable.audience}) = ${audience.toLowerCase()}`);
   if (q) {
     const term = `%${q.replace(/[%_]/g, "\\$&")}%`;
     conditions.push(
@@ -545,6 +546,8 @@ router.get("/products", async (req, res): Promise<void> => {
         ilike(productsTable.name, term),
         ilike(productsTable.brand, term),
         ilike(productsTable.description, term),
+        ilike(productsTable.scentFamily, term),
+        sql`${productsTable.notes}::text ILIKE ${term}`,
       )!,
     );
   }
@@ -555,6 +558,7 @@ router.get("/products", async (req, res): Promise<void> => {
       lowest: min(productVariantsTable.priceMinor).as("lowest"),
     })
     .from(productVariantsTable)
+    .where(not(ilike(productVariantsTable.sku, "SAMPLE-%")))
     .groupBy(productVariantsTable.productId)
     .as("lowest_prices");
   const orderBy =
@@ -897,6 +901,32 @@ router.post("/admin/products", requireAdmin, async (req, res): Promise<void> => 
   }
 });
 
+function parseVariantEdits(body: unknown) {
+  if (!body || typeof body !== "object" || !("variants" in body)) return { variants: null };
+  const raw = (body as { variants?: unknown }).variants;
+  if (!Array.isArray(raw) || raw.length === 0) return { error: "Keep at least one size." };
+  const variants: { id: number | null; size: string; sku: string; priceMinor: number; stock: number }[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") return { error: "Check each size." };
+    const row = item as Record<string, unknown>;
+    const id = row.id == null || row.id === "" ? null : Number(row.id);
+    const size = typeof row.size === "string" ? row.size.trim() : "";
+    const sku = typeof row.sku === "string" ? row.sku.trim() : "";
+    const priceMinor = Math.round(Number(row.priceMinor));
+    const stock = Number(row.stock);
+    if (id !== null && !Number.isInteger(id)) return { error: "A size could not be matched." };
+    if (!size || !sku) return { error: "Each size needs a name and a code." };
+    if (isSampleSku(sku)) return { error: "Sample codes are kept automatically." };
+    if (!Number.isInteger(priceMinor) || priceMinor < 0) return { error: "Enter a price for each size." };
+    if (!Number.isInteger(stock) || stock < 0) return { error: "Stock must be zero or more." };
+    variants.push({ id, size, sku, priceMinor, stock });
+  }
+  if (new Set(variants.map((variant) => variant.sku)).size !== variants.length) {
+    return { error: "Each size needs its own code." };
+  }
+  return { variants };
+}
+
 router.patch("/admin/products/:id", requireAdmin, async (req, res): Promise<void> => {
   const params = UpdateProductParams.safeParse(req.params);
   const parsed = UpdateProductBody.safeParse(req.body);
@@ -910,21 +940,67 @@ router.patch("/admin/products/:id", requireAdmin, async (req, res): Promise<void
     });
     return;
   }
-  const updates = parsed.data;
-  const [row] = await db
-    .update(productsTable)
-    .set({
-      ...updates,
-      updatedAt: new Date(),
-    })
-    .where(eq(productsTable.id, params.data.id))
-    .returning();
-  if (!row) {
-    res.status(404).json({ error: "Fragrance not found." });
+  const variantEdits = parseVariantEdits(req.body);
+  if ("error" in variantEdits) {
+    res.status(400).json({ error: variantEdits.error });
     return;
   }
-  const product = (await productResults([row]))[0];
-  res.json(UpdateProductResponse.parse(product));
+  try {
+    const row = await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(productsTable)
+        .set({ ...parsed.data, updatedAt: new Date() })
+        .where(eq(productsTable.id, params.data.id))
+        .returning();
+      if (!updated) return null;
+      if (variantEdits.variants) {
+        const existing = await tx
+          .select()
+          .from(productVariantsTable)
+          .where(eq(productVariantsTable.productId, updated.id));
+        const bottles = existing.filter((variant) => !isSampleSku(variant.sku));
+        const kept = new Set<number>();
+        for (const variant of variantEdits.variants) {
+          if (variant.id === null) {
+            await tx.insert(productVariantsTable).values({
+              productId: updated.id,
+              size: variant.size,
+              sku: variant.sku,
+              priceMinor: variant.priceMinor,
+              stock: variant.stock,
+            });
+            continue;
+          }
+          const match = bottles.find((item) => item.id === variant.id);
+          if (!match) throw new Error("A size on this fragrance could not be found.");
+          kept.add(variant.id);
+          await tx.update(productVariantsTable).set({
+            size: variant.size,
+            sku: variant.sku,
+            priceMinor: variant.priceMinor,
+            stock: variant.stock,
+          }).where(eq(productVariantsTable.id, variant.id));
+        }
+        const removed = bottles.filter((variant) => !kept.has(variant.id)).map((variant) => variant.id);
+        if (removed.length) {
+          await tx.delete(productVariantsTable).where(inArray(productVariantsTable.id, removed));
+        }
+      }
+      return updated;
+    });
+    if (!row) {
+      res.status(404).json({ error: "Fragrance not found." });
+      return;
+    }
+    const product = (await productResults([row]))[0];
+    res.json(UpdateProductResponse.parse(product));
+  } catch (error) {
+    req.log.warn({ error }, "Fragrance update rejected");
+    const message = error instanceof Error && error.message.startsWith("A size")
+      ? error.message
+      : "Could not save these sizes. Check that each code is unique.";
+    res.status(409).json({ error: message });
+  }
 });
 
 router.delete("/admin/products/:id", requireAdmin, async (req, res): Promise<void> => {
