@@ -996,6 +996,153 @@ router.get("/admin/orders", requireAdmin, async (_req, res): Promise<void> => {
   res.json(GetAdminOrdersResponse.parse(orders.map(toOrder)));
 });
 
+router.get("/admin/orders/:id", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Choose an order." });
+    return;
+  }
+  const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, id)).limit(1);
+  if (!order) {
+    res.status(404).json({ error: "Order not found." });
+    return;
+  }
+  const items = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id));
+  res.json({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    email: order.email.endsWith("@arvessofragrances.local") ? "" : order.email,
+    recipientName: order.recipientName,
+    address1: order.address1,
+    address2: order.address2 ?? "",
+    city: order.city,
+    region: order.region ?? "",
+    postcode: order.postcode,
+    subtotalMinor: order.subtotalMinor,
+    discountMinor: order.discountMinor,
+    discountCode: order.discountCode ?? "",
+    shippingMinor: order.shippingMinor,
+    totalMinor: order.totalMinor,
+    currency: order.currency,
+    paymentMethod: order.paymentMethod,
+    fulfillment: order.fulfillment,
+    tracking: order.tracking ?? "",
+    status: order.status,
+    createdAt: order.createdAt,
+    paidAt: order.paidAt,
+    items: items.map((item) => ({
+      name: item.productName,
+      brand: item.brand,
+      size: item.variantSize,
+      sku: item.sku,
+      quantity: item.quantity,
+      unitPriceMinor: item.unitPriceMinor,
+    })),
+  });
+});
+
+function orderLetter(order: OrderRow, items: { brand: string; productName: string; variantSize: string; quantity: number; unitPriceMinor: number }[], note: string, refunded: boolean) {
+  const lines = items.map((item) => `• ${item.brand} ${item.productName}, ${item.variantSize} × ${item.quantity} — $${money(item.unitPriceMinor * item.quantity)} NZD`);
+  const firstName = order.recipientName.trim().split(/\s+/)[0] || order.recipientName;
+  const paid = order.status === "paid";
+  const payment = order.paymentMethod === "cash"
+    ? "This was an in-person payment, so nothing further is owed."
+    : !paid
+      ? "You were not charged."
+      : refunded
+        ? `The payment of $${money(order.totalMinor)} NZD is being returned to the same PayPal account. It can take a few days to show.`
+        : `If you already paid $${money(order.totalMinor)} NZD, reply to this email and we will return it to the same PayPal account.`;
+  const body = [
+    `Hello ${firstName},`,
+    "",
+    `This is Arvessó Fragrances. Your order ${order.orderNumber} has been cancelled.`,
+    "",
+    "What was ordered:",
+    ...lines,
+    "",
+    `Order total: $${money(order.totalMinor)} NZD`,
+    note ? "" : null,
+    note ? `Note from us: ${note}` : null,
+    "",
+    payment,
+    "",
+    "If you still want the fragrance, reply to this email and we will sort it out.",
+    "",
+    "Arvessó Fragrances",
+    "arvessofragrances@gmail.com",
+    "New Zealand",
+  ].filter((line) => line !== null).join("\n");
+  return {
+    to: order.email.endsWith("@arvessofragrances.local") ? "" : order.email,
+    subject: `Your Arvessó Fragrances order ${order.orderNumber} has been cancelled`,
+    body,
+  };
+}
+
+router.post("/admin/orders/:id/cancel", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 280) : "";
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Choose an order to cancel." });
+    return;
+  }
+  const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, id)).limit(1);
+  if (!order) {
+    res.status(404).json({ error: "Order not found." });
+    return;
+  }
+  if (order.status === "cancelled" || order.status === "refunded" || order.status === "failed") {
+    res.status(400).json({ error: "This order is already closed." });
+    return;
+  }
+  if (order.status !== "pending" && order.status !== "paid") {
+    res.status(400).json({ error: "This order cannot be cancelled." });
+    return;
+  }
+  let refunded = false;
+  if (order.status === "paid" && order.paymentMethod !== "cash" && order.paypalCaptureId) {
+    try {
+      const mode = order.paypalApprovalUrl ? paypalModeForOrder(order) : paypalMode();
+      await paypalRequest(
+        `/v2/payments/captures/${encodeURIComponent(order.paypalCaptureId)}/refund`,
+        { method: "POST", body: JSON.stringify({ note_to_payer: note || `Order ${order.orderNumber} was cancelled.` }) },
+        randomUUID(),
+        mode,
+      );
+      refunded = true;
+    } catch (error) {
+      req.log.warn({ error, orderId: order.id }, "PayPal refund failed");
+      res.status(502).json({ error: "PayPal did not refund this payment, so the order was not cancelled." });
+      return;
+    }
+  }
+  const items = await db.transaction(async (tx) => {
+    const [current] = await tx.select().from(ordersTable).where(eq(ordersTable.id, id)).for("update");
+    if (!current || (current.status !== "pending" && current.status !== "paid")) {
+      throw new Error("This order can no longer be cancelled.");
+    }
+    const lines = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, id));
+    for (const item of lines) {
+      if (item.variantId === null) continue;
+      await tx.update(productVariantsTable).set({ stock: sql`${productVariantsTable.stock} + ${item.quantity}` }).where(eq(productVariantsTable.id, item.variantId));
+      await tx.insert(inventoryMovementsTable).values({
+        variantId: item.variantId,
+        delta: item.quantity,
+        reason: `Order ${current.orderNumber} cancelled`,
+        actorClerkId: getAuth(req).userId ?? null,
+        orderId: id,
+      });
+    }
+    if (current.discountCode) {
+      await tx.update(discountCodesTable).set({ usedCount: sql`GREATEST(${discountCodesTable.usedCount} - 1, 0)` }).where(eq(discountCodesTable.code, current.discountCode));
+    }
+    await tx.update(ordersTable).set({ status: refunded ? "refunded" : "cancelled" }).where(eq(ordersTable.id, id));
+    return lines;
+  });
+  const email = orderLetter(order, items, note, refunded);
+  res.json({ status: refunded ? "refunded" : "cancelled", email });
+});
+
 router.get("/account/orders", async (req, res): Promise<void> => {
   const clerkUserId = getAuth(req).userId;
   if (!clerkUserId) {

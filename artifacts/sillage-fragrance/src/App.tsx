@@ -1232,7 +1232,71 @@ function AdminOverview() {
 }
 function Metric({label,value}:{label:string;value:string|number}){return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;}
 function EmptyAdmin({message}:{message:string}){return <div className="notice">{message}</div>;}
-function OrderTable({orders}:{orders:Order[]}){return <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Status</th><th>Discount</th><th>Total</th></tr></thead><tbody>{orders.map((order)=><tr key={order.id}><td>{order.orderNumber}</td><td>{new Date(order.createdAt).toLocaleDateString('en-NZ')}</td><td>{order.email}</td><td><span className="status-pill">{order.status}</span></td><td>{order.discountMinor?`−${money(order.discountMinor,order.currency)}`:'—'}</td><td>{money(order.totalMinor,order.currency)}</td></tr>)}</tbody></table></div>;}
+type OrderDetail = {
+  id: number; orderNumber: string; email: string; recipientName: string;
+  address1: string; address2: string; city: string; region: string; postcode: string;
+  subtotalMinor: number; discountMinor: number; discountCode: string; shippingMinor: number; totalMinor: number; currency: string;
+  paymentMethod: string; fulfillment: string; tracking: string; status: string; createdAt: string; paidAt: string | null;
+  items: { name: string; brand: string; size: string; sku: string; quantity: number; unitPriceMinor: number }[];
+};
+
+function shopMail(to: string, subject: string, body: string) {
+  return `mailto:${to}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body.replace(/\n/g, '\r\n'))}`;
+}
+
+function Letter({ email }: { email: { to: string; subject: string; body: string } }) {
+  const [copied, setCopied] = useState(false);
+  return <div className="letter-wrap">
+    <span className="eyebrow">{email.to ? `To ${email.to}` : 'No email on this order'}</span>
+    <strong className="letter-subject">{email.subject}</strong>
+    <pre className="letter">{email.body}</pre>
+    {email.to && <div className="admin-actions"><a className="button button-small" href={shopMail(email.to, email.subject, email.body)}>Open this email</a><button type="button" className="button button-outline button-small" onClick={() => { void navigator.clipboard.writeText(`To: ${email.to}\nSubject: ${email.subject}\n\n${email.body}`); setCopied(true); }}>{copied ? 'Copied' : 'Copy email'}</button></div>}
+  </div>;
+}
+
+function OrderTable({orders}:{orders:Order[]}) {
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState<number | null>(null);
+  const [detail, setDetail] = useState<OrderDetail | null>(null);
+  const [note, setNote] = useState('');
+  const [letter, setLetter] = useState<{ to: string; subject: string; body: string } | null>(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setLetter(null);
+    setNote('');
+    if (!selected) { setDetail(null); return; }
+    let ignore = false;
+    void (async () => {
+      const response = await fetch(`/api/admin/orders/${selected}`, { credentials: 'include' });
+      const body: unknown = await response.json().catch(() => null);
+      if (ignore) return;
+      if (!response.ok || !body || typeof body !== 'object' || !('items' in body)) {
+        setError('Could not open this order.');
+        setDetail(null);
+        return;
+      }
+      setError('');
+      setDetail(body as OrderDetail);
+    })();
+    return () => { ignore = true; };
+  }, [selected]);
+  return <>
+    <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Status</th><th>Discount</th><th>Total</th></tr></thead><tbody>{orders.map((order)=><tr key={order.id} className={selected===order.id?'selected':''}><td><button type="button" className="text-link" onClick={() => setSelected(selected===order.id?null:order.id)} data-testid={`button-order-${order.id}`}>{order.orderNumber}</button></td><td>{new Date(order.createdAt).toLocaleDateString('en-NZ')}</td><td>{order.email}</td><td><span className="status-pill">{order.status}</span></td><td>{order.discountMinor?`−${money(order.discountMinor,order.currency)}`:'—'}</td><td>{money(order.totalMinor,order.currency)}</td></tr>)}</tbody></table></div>
+    {error && <div className="notice error">{error}</div>}
+    {detail && <article className="order-detail">
+      <div className="admin-top"><div><span className="eyebrow">{detail.paymentMethod === 'cash' ? 'Cash, in person' : 'Paid online'} · {detail.fulfillment === 'sent' ? 'Sent' : detail.fulfillment === 'collected' ? 'Collected' : 'To send'}</span><h2>{detail.recipientName}</h2></div><button type="button" className="icon-button" aria-label="Close order" onClick={() => setSelected(null)}><X size={16}/></button></div>
+      <p className="product-size">{detail.orderNumber} · {new Date(detail.createdAt).toLocaleString('en-NZ')}{detail.email ? ` · ${detail.email}` : ''}</p>
+      <p>{[detail.address1, detail.address2, detail.city, detail.region, detail.postcode].filter(Boolean).join(', ')}</p>
+      <div className="table-wrap"><table className="data-table"><thead><tr><th>Fragrance</th><th>Size</th><th>Qty</th><th>Price</th></tr></thead><tbody>{detail.items.map((item, index) => <tr key={`${item.sku}-${index}`}><td><strong>{item.name}</strong><div className="product-size">{item.brand} · {item.sku}</div></td><td>{item.size}</td><td>{item.quantity}</td><td>{money(item.unitPriceMinor * item.quantity, detail.currency)}</td></tr>)}</tbody></table></div>
+      <div className="order-totals"><span>Subtotal</span><strong>{money(detail.subtotalMinor, detail.currency)}</strong>{detail.discountMinor > 0 && <><span>Discount{detail.discountCode ? ` ${detail.discountCode}` : ''}</span><strong>−{money(detail.discountMinor, detail.currency)}</strong></>}<span>Delivery</span><strong>{detail.shippingMinor ? money(detail.shippingMinor, detail.currency) : 'Free'}</strong><span>Total</span><strong>{money(detail.totalMinor, detail.currency)}</strong></div>
+      {detail.tracking && <p className="product-size">Tracking: {detail.tracking}</p>}
+      <p className="product-size">Status: {detail.status}{detail.paidAt ? ` · Paid ${new Date(detail.paidAt).toLocaleString('en-NZ')}` : ''}</p>
+      {detail.status !== 'cancelled' && detail.status !== 'refunded' && detail.status !== 'failed' && <div className="cancel-order"><label>Note for the customer, optional<textarea className="textarea" rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Why it is cancelled, or when they can expect a refund"/></label><button type="button" className="button button-outline button-small" disabled={busy} onClick={() => void (async () => { if (!window.confirm(`Cancel ${detail.orderNumber}? Stock goes back, and you can email ${detail.recipientName}.`)) return; setBusy(true); setError(''); const response = await fetch(`/api/admin/orders/${detail.id}/cancel`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }) }); const body: unknown = await response.json().catch(() => null); setBusy(false); if (!response.ok || !body || typeof body !== 'object' || !('email' in body)) { setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not cancel this order.'); return; } const result = body as { status: string; email: { to: string; subject: string; body: string } }; setDetail({ ...detail, status: result.status }); setLetter(result.email); await qc.invalidateQueries({ queryKey: getGetAdminOrdersQueryKey() }); await qc.invalidateQueries({ queryKey: getGetAdminDashboardQueryKey() }); })()}>Cancel order</button></div>}
+      {letter && <Letter email={letter}/>}
+    </article>}
+  </>;
+}
 
 function ProductEditor({product,onClose}:{product?:Product;onClose:()=>void}) {
   const qc=useQueryClient();
@@ -1565,6 +1629,7 @@ function CustomerMessagePage({ mode }: { mode: 'request' | 'report' }) {
   const [filled, setFilled] = useState(false);
   const [error, setError] = useState('');
   const [sent, setSent] = useState(false);
+  const [letter, setLetter] = useState<{ to: string; subject: string; body: string } | null>(null);
   useEffect(() => {
     if (!isLoaded || filled) return;
     setForm((current) => ({
@@ -1589,13 +1654,28 @@ function CustomerMessagePage({ mode }: { mode: 'request' | 'report' }) {
     }
     setSent(true);
     if (mode === 'report') {
-      const subject = encodeURIComponent(`Arvessó report${form.topic ? `: ${form.topic}` : ''}`);
-      const mailBody = encodeURIComponent(`${form.name}\n${form.email}\n\n${form.body}`);
-      window.location.href = `mailto:${STORE_EMAIL}?subject=${subject}&body=${mailBody}`;
+      setLetter({
+        to: STORE_EMAIL,
+        subject: `Customer report from ${form.name.trim()} — ${form.topic}`,
+        body: [
+          'Arvessó Fragrances',
+          'Customer report',
+          '',
+          `From: ${form.name.trim()}`,
+          `Email: ${form.email.trim()}`,
+          `About: ${form.topic}`,
+          `Sent: ${new Date().toLocaleString('en-NZ')}`,
+          '',
+          'What they reported:',
+          form.body.trim(),
+          '',
+          `Reply directly to ${form.email.trim()}.`,
+        ].join('\n'),
+      });
     }
   };
   return <main className="wrap"><div className="page-head"><span className="eyebrow">{mode === 'report' ? 'Customer report' : 'For the shop'}</span><h1>{mode === 'report' ? 'Report a problem' : 'Requests and ideas'}</h1><p>{mode === 'report' ? `Tell us what happened. This opens an email to ${STORE_EMAIL}, and a copy is kept in the studio.` : 'Ask for a fragrance you want to buy, share an idea, or leave a suggestion.'}</p></div>
-    {sent ? <div className="notice">{mode === 'report' ? `If your email app opened, send that message to ${STORE_EMAIL}. A copy is already in the studio.` : 'Saved. We will read it in the studio.'}</div> : <form className="admin-form" onSubmit={(event) => void submit(event)}>
+    {sent ? <div>{mode === 'report' && letter ? <><div className="notice">The report is saved in the studio. Open the email below so it arrives at {STORE_EMAIL} with the details filled in.</div><Letter email={letter}/></> : <div className="notice">Saved. We will read it in the studio.</div>}</div> : <form className="admin-form" onSubmit={(event) => void submit(event)}>
       {error && <div className="notice error wide">{error}</div>}
       {mode === 'request' ? <label>What is this<select className="select" value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })} data-testid="select-message-kind"><option value="purchase">A fragrance I want to buy</option><option value="idea">An idea</option><option value="suggestion">A suggestion</option></select></label> : <label>What it is about<select className="select" value={form.topic} onChange={(event) => setForm({ ...form, topic: event.target.value })}><option>An order</option><option>A product</option><option>The website</option><option>Something else</option></select></label>}
       <label>Name<input required className="field" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} data-testid="input-message-name"/></label>
