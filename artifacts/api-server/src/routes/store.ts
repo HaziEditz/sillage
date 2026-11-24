@@ -637,6 +637,15 @@ router.get("/checkout/config", async (req, res): Promise<void> => {
   }
 });
 
+router.get("/products/brands", async (_req, res): Promise<void> => {
+  const rows = await db
+    .selectDistinct({ brand: productsTable.brand })
+    .from(productsTable)
+    .where(eq(productsTable.status, "published"))
+    .orderBy(asc(productsTable.brand));
+  res.json(rows.map((row) => row.brand).filter(Boolean));
+});
+
 router.get("/products/:slug", async (req, res): Promise<void> => {
   await syncSampleVariants();
   const params = GetProductParams.safeParse(req.params);

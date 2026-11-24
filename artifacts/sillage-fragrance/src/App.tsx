@@ -698,11 +698,20 @@ function HomePage() {
 
 function ShopPage() {
   const [q, setQ] = useState('');
+  const [brand, setBrand] = useState('');
   const [audience, setAudience] = useState('');
   const [sort, setSort] = useState<'newest'|'price-asc'|'price-desc'|'name'>('newest');
-  const { data, isLoading, isError, refetch } = useGetProducts({ q: q || undefined, audience: audience || undefined, sort, page: 1, pageSize: 48 }, { query: { placeholderData: (previous) => previous } });
+  const [brands, setBrands] = useState<string[]>([]);
+  useEffect(() => {
+    void fetch('/api/products/brands').then(async (response) => {
+      const body: unknown = await response.json().catch(() => null);
+      if (response.ok && Array.isArray(body)) setBrands(body.filter((item): item is string => typeof item === 'string' && item.trim().length > 0));
+    });
+  }, []);
+  const { data, isLoading, isError, refetch } = useGetProducts({ q: q || undefined, brand: brand || undefined, audience: audience || undefined, sort, page: 1, pageSize: 48 }, { query: { placeholderData: (previous) => previous } });
   return <main className="wrap"><div className="page-head"><span className="eyebrow">The Arvessó edit</span><h1>Fragrance</h1><p>Explore an evolving collection of distinctive fragrance. Search by name, brand or the notes you love.</p></div>
-    <div className="catalog-tools"><label style={{position:'relative',flex:1}}><Search size={15} style={{position:'absolute',left:13,top:14,color:'#77736b'}}/><input className="field" style={{paddingLeft:38}} value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search the collection" aria-label="Search fragrances" data-testid="input-search-products"/></label>
+    <div className="catalog-tools"><label style={{position:'relative',flex:1}}><Search size={15} style={{position:'absolute',left:13,top:14,color:'#77736b'}}/><input className="field" style={{paddingLeft:38}} value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Search name, brand or notes" aria-label="Search fragrances" data-testid="input-search-products"/></label>
+      <select className="select brand-filter" value={brand} onChange={(e)=>setBrand(e.target.value)} aria-label="Filter by brand" data-testid="select-brand"><option value="">All brands</option>{brands.map((name) => <option key={name} value={name}>{name}</option>)}</select>
       <select className="select" value={audience} onChange={(e)=>setAudience(e.target.value)} aria-label="Filter by audience" data-testid="select-audience"><option value="">All audiences</option><option value="women">Women</option><option value="men">Men</option><option value="unisex">Unisex</option></select>
       <select className="select" value={sort} onChange={(e)=>setSort(e.target.value as typeof sort)} aria-label="Sort collection" data-testid="select-sort"><option value="newest">Recently added</option><option value="name">Name</option><option value="price-asc">Price: low to high</option><option value="price-desc">Price: high to low</option></select>
     </div>
@@ -1338,6 +1347,18 @@ function AdminProducts() {
   const [editing,setEditing]=useState<Product|null|false>(false);
   const [deletingId,setDeletingId]=useState<number|null>(null);
   const [deleteError,setDeleteError]=useState('');
+  const [query,setQuery]=useState('');
+  const [brand,setBrand]=useState('');
+  const brands=useMemo(()=>[...new Set((products??[]).map(product=>product.brand.trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b)),[products]);
+  const shown=useMemo(()=>{
+    const term=query.trim().toLowerCase();
+    return (products??[]).filter((product)=>{
+      if(brand && product.brand!==brand) return false;
+      if(!term) return true;
+      const haystack=[product.name,product.brand,product.audience,product.scentFamily??'',product.description,...(product.notes??[]),...product.variants.map(variant=>`${variant.sku} ${variant.size}`)].join(' ').toLowerCase();
+      return haystack.includes(term);
+    });
+  },[products,query,brand]);
   const update=useUpdateProduct(); const qc=useQueryClient();
   const remove=async (product:Product)=>{
     if(!window.confirm(`Delete ${product.name}? It will leave the shop and the studio. Past orders keep their own record.`)) return;
@@ -1363,7 +1384,8 @@ function AdminProducts() {
   return <AdminLayout><div className="admin-top"><div><span className="eyebrow">Catalogue management</span><h1>Products</h1></div><button className="button button-small" onClick={()=>setEditing(null)} data-testid="button-new-product"><Plus size={14}/> Add fragrance</button></div>
     {deleteError&&<div className="notice error">{deleteError}</div>}
     {editing!==false&&<ProductEditor product={editing||undefined} onClose={()=>setEditing(false)}/>}
-    {isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:products?.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Fragrance</th><th>Variants</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead><tbody>{products.map(p=><tr key={p.id}><td><strong>{p.name}</strong><div className="product-size">{p.brand}</div></td><td>{p.variants.length}</td><td>{p.variants.filter(v=>!v.sku.startsWith('SAMPLE-')).reduce((sum,v)=>sum+v.stock,0)}</td><td><span className="status-pill">{p.status}</span></td><td><div className="admin-actions"><button className="button button-outline button-small" onClick={()=>setEditing(p)} data-testid={`button-edit-product-${p.id}`}>Edit</button><button className="button button-outline button-small" disabled={update.isPending} onClick={()=>update.mutate({id:p.id,data:{status:p.status==='published'?'draft':'published'}},{onSuccess:()=>{void qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});void qc.invalidateQueries({queryKey:getGetProductsQueryKey()});}})} data-testid={`button-toggle-publish-${p.id}`}>{p.status==='published'?'Unpublish':'Publish'}</button><button className="button button-outline button-small" disabled={deletingId===p.id} onClick={()=>void remove(p)} data-testid={`button-delete-product-${p.id}`}>{deletingId===p.id?'Deleting…':'Delete'}</button></div></td></tr>)}</tbody></table></div>:<EmptyCatalog admin/>}
+    {!isLoading&&!isError&&!!products?.length&&<div className="catalog-tools"><label style={{position:'relative',flex:1}}><Search size={15} style={{position:'absolute',left:13,top:14,color:'#77736b'}}/><input className="field" style={{paddingLeft:38}} value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Search name, brand, code or notes" aria-label="Search studio fragrances" data-testid="input-search-admin-products"/></label><select className="select brand-filter" value={brand} onChange={(e)=>setBrand(e.target.value)} aria-label="Filter studio by brand" data-testid="select-admin-brand"><option value="">All brands</option>{brands.map((name)=><option key={name} value={name}>{name}</option>)}</select></div>}
+    {isLoading?<div className="skeleton" style={{height:220}}/>:isError?<><AdminError error={error}/><button className="button button-small" onClick={()=>void refetch()}>Retry</button></>:shown.length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Fragrance</th><th>Variants</th><th>Stock</th><th>Status</th><th>Actions</th></tr></thead><tbody>{shown.map(p=><tr key={p.id}><td><strong>{p.name}</strong><div className="product-size">{p.brand}</div></td><td>{p.variants.length}</td><td>{p.variants.filter(v=>!v.sku.startsWith('SAMPLE-')).reduce((sum,v)=>sum+v.stock,0)}</td><td><span className="status-pill">{p.status}</span></td><td><div className="admin-actions"><button className="button button-outline button-small" onClick={()=>setEditing(p)} data-testid={`button-edit-product-${p.id}`}>Edit</button><button className="button button-outline button-small" disabled={update.isPending} onClick={()=>update.mutate({id:p.id,data:{status:p.status==='published'?'draft':'published'}},{onSuccess:()=>{void qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});void qc.invalidateQueries({queryKey:getGetProductsQueryKey()});}})} data-testid={`button-toggle-publish-${p.id}`}>{p.status==='published'?'Unpublish':'Publish'}</button><button className="button button-outline button-small" disabled={deletingId===p.id} onClick={()=>void remove(p)} data-testid={`button-delete-product-${p.id}`}>{deletingId===p.id?'Deleting…':'Delete'}</button></div></td></tr>)}</tbody></table></div>:products?.length?<div className="empty-state"><h2>Nothing matches</h2><p>Try another brand or clear the search.</p></div>:<EmptyCatalog admin/>}
   </AdminLayout>;
 }
 
