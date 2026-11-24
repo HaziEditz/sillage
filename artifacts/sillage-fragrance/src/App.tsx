@@ -1309,11 +1309,16 @@ function ProductEditor({product,onClose}:{product?:Product;onClose:()=>void}) {
   const submit=(e:FormEvent)=>{e.preventDefault();setError('');
     const imageUrls=fields.imageUrls.split('\n').map(line=>line.trim()).filter(Boolean);
     if(imageUrls.length>8){setError('Add up to 8 extra photos.');return;}
-    if(imageUrls.some(url=>{try{const parsed=new URL(url);return parsed.protocol!=='http:'&&parsed.protocol!=='https:';}catch{return true;}})){setError('Each extra photo needs a full image link, one per line.');return;}
+    const badLink=(url:string)=>{try{const parsed=new URL(url);return parsed.protocol!=='http:'&&parsed.protocol!=='https:';}catch{return true;}};
+    if(fields.imageUrl.trim()&&badLink(fields.imageUrl.trim())){setError('The main photo needs a full link starting with https://, or leave it blank.');return;}
+    if(imageUrls.some(badLink)){setError('Each extra photo needs a full image link, one per line.');return;}
+    if(variants.some(v=>!v.size.trim()||!v.sku.trim())){setError('Each size needs a name and its own code.');return;}
+    if(variants.some(v=>!Number.isFinite(Number(v.price))||Number(v.price)<0||!Number.isInteger(Number(v.stock))||Number(v.stock)<0)){setError('Enter a price like 95.00 and a whole number for stock.');return;}
+    const explain=(err:unknown)=>{const raw=err instanceof Error && err.message ? err.message : 'Could not save this fragrance. Check the form and try again.';return raw.startsWith('HTTP ') ? raw.slice(raw.indexOf(': ')+2) : raw;};
     if(!variants.length){setError('Keep at least one size.');return;}
     const common={name:fields.name,brand:fields.brand,description:fields.description,audience:fields.audience,concentration:fields.concentration||null,scentFamily:fields.scentFamily||null,imageUrl:fields.imageUrl||null,imageUrls,status:fields.status as ProductInput['status'],featured:fields.featured,bestseller:fields.bestseller,notes:fields.notes.split(',').map(x=>x.trim()).filter(Boolean)};
-    if(product){update.mutate({id:product.id,data:{...common,variants:variantPayload()} as ProductUpdate},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetProductsQueryKey()});onClose();},onError:(err)=>setError(err instanceof Error && err.message ? err.message : 'Unable to update this fragrance. Check the sizes and codes.')});}
-    else {const data:ProductInput={...common,variants:variantPayload()};create.mutate({data},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetAdminDashboardQueryKey()});onClose();},onError:()=>setError('Unable to create this fragrance. Check required details and try again.')});}
+    if(product){update.mutate({id:product.id,data:{...common,variants:variantPayload()} as ProductUpdate},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetProductsQueryKey()});onClose();},onError:(err)=>setError(explain(err))});}
+    else {const data:ProductInput={...common,variants:variantPayload()};create.mutate({data},{onSuccess:async()=>{await qc.invalidateQueries({queryKey:getGetAdminProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetProductsQueryKey()});await qc.invalidateQueries({queryKey:getGetAdminDashboardQueryKey()});onClose();},onError:(err)=>setError(explain(err))});}
   };
   const busy=create.isPending||update.isPending;
   return <form className="admin-form" onSubmit={submit}><div className="wide" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><span className="eyebrow">{product?'Edit fragrance':'New fragrance'}</span><button type="button" className="icon-button" onClick={onClose} aria-label="Close editor" data-testid="button-close-editor"><X size={17}/></button></div>
@@ -1489,40 +1494,73 @@ function AdminDiscounts() {
   </AdminLayout>;
 }
 
-type CashSale = { id: number; orderNumber: string; recipientName: string; contact: string; note: string; totalMinor: number; createdAt: string; items: { name: string; size: string; quantity: number; unitPriceMinor: number }[] };
+type CashSale = { id: number; orderNumber: string; recipientName: string; contact: string; note: string; totalMinor: number; createdAt: string; items: { name: string; size: string; quantity: number; variantId: number | null; unitPriceMinor: number }[] };
 
 function AdminCash() {
+  const qc = useQueryClient();
   const { data: products, isLoading } = useGetAdminProducts({ query: { queryKey: getGetAdminProductsQueryKey() } });
   const [form, setForm] = useState({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [sales, setSales] = useState<CashSale[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const options = (products ?? []).filter((product) => product.status === 'published').flatMap((product) => product.variants.filter((variant) => variant.stock > 0).map((variant) => ({ id: variant.id, label: `${product.brand} ${product.name} · ${variant.sku.startsWith('SAMPLE-') ? '2 ml sample' : variant.size} · ${money(variant.priceMinor)}`, stock: variant.stock })));
+  const options = (products ?? []).filter((product) => product.status === 'published').flatMap((product) => product.variants.filter((variant) => variant.stock > 0 || variant.id === Number(form.variantId)).map((variant) => ({ id: variant.id, label: `${product.brand} ${product.name} · ${variant.sku.startsWith('SAMPLE-') ? '2 ml sample' : variant.size} · ${money(variant.priceMinor)}`, stock: variant.stock })));
   const load = async () => {
     const response = await fetch('/api/admin/cash-sales', { credentials: 'include' });
     const body: unknown = await response.json().catch(() => null);
     if (response.ok && Array.isArray(body)) setSales(body as CashSale[]);
   };
   useEffect(() => { void load(); }, []);
+  const refreshStock = async () => {
+    await qc.invalidateQueries({ queryKey: getGetAdminProductsQueryKey() });
+    await qc.invalidateQueries({ queryKey: getGetAdminDashboardQueryKey() });
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
     setMessage('');
-    const response = await fetch('/api/admin/cash-sales', {
-      method: 'POST',
+    const payload = { recipientName: form.recipientName, contact: form.contact, note: form.note, variantId: Number(form.variantId), quantity: Number(form.quantity) };
+    const response = await fetch(editingId ? `/api/admin/cash-sales/${editingId}` : '/api/admin/cash-sales', {
+      method: editingId ? 'PATCH' : 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipientName: form.recipientName, contact: form.contact, note: form.note, lines: [{ variantId: Number(form.variantId), quantity: Number(form.quantity) }] }),
+      body: JSON.stringify(editingId ? payload : { recipientName: payload.recipientName, contact: payload.contact, note: payload.note, lines: [{ variantId: payload.variantId, quantity: payload.quantity }] }),
     });
     const body: unknown = await response.json().catch(() => null);
     if (!response.ok) {
-      const text = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not record this cash sale.';
+      const text = body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not save this cash sale.';
       setError(text);
       return;
     }
     setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
-    setMessage('Cash sale recorded. It is marked paid and the stock has been reduced.');
+    setEditingId(null);
+    setMessage(editingId ? 'Cash sale updated. The stock has been adjusted.' : 'Cash sale recorded. The stock has been reduced.');
     await load();
+    await refreshStock();
+  };
+  const editSale = (sale: CashSale) => {
+    const item = sale.items[0];
+    setEditingId(sale.id);
+    setError('');
+    setMessage('');
+    setForm({ recipientName: sale.recipientName, contact: sale.contact, note: sale.note, variantId: item?.variantId ? String(item.variantId) : '', quantity: String(item?.quantity ?? 1) });
+  };
+  const removeSale = async (sale: CashSale) => {
+    if (!window.confirm(`Delete ${sale.orderNumber}? The fragrance goes back into stock.`)) return;
+    setError('');
+    const response = await fetch(`/api/admin/cash-sales/${sale.id}`, { method: 'DELETE', credentials: 'include' });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not delete this cash sale.');
+      return;
+    }
+    if (editingId === sale.id) {
+      setEditingId(null);
+      setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
+    }
+    setMessage('Cash sale deleted. The stock has been put back.');
+    await load();
+    await refreshStock();
   };
   return <AdminLayout>
     <div className="admin-top"><div><span className="eyebrow">In person</span><h1>Cash sales</h1></div></div>
@@ -1535,9 +1573,9 @@ function AdminCash() {
       <label className="wide">What they took<select required className="select" value={form.variantId} onChange={(e) => setForm({ ...form, variantId: e.target.value })} data-testid="select-cash-item"><option value="">Choose a fragrance</option>{options.map((option) => <option key={option.id} value={option.id}>{option.label} · {option.stock} on hand</option>)}</select></label>
       <label>Quantity<input className="field" type="number" min="1" max="10" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })}/></label>
       <label className="wide">Note<textarea className="textarea" rows={3} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="Where you met, or anything you want to remember"/></label>
-      <div className="wide"><button className="button button-small" disabled={isLoading} data-testid="button-record-cash">Record cash payment</button></div>
+      <div className="wide admin-actions"><button className="button button-small" disabled={isLoading} data-testid="button-record-cash">{editingId ? 'Save cash sale' : 'Record cash payment'}</button>{editingId && <button type="button" className="button button-outline button-small" onClick={() => { setEditingId(null); setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' }); }}>Cancel edit</button>}</div>
     </form>
-    {sales.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>When</th><th>Person</th><th>Items</th><th>Total</th></tr></thead><tbody>{sales.map((sale) => <tr key={sale.id}><td>{new Date(sale.createdAt).toLocaleDateString('en-NZ')}<div className="product-size">{sale.orderNumber}</div></td><td><strong>{sale.recipientName}</strong>{sale.contact && <div className="product-size">{sale.contact}</div>}{sale.note && <div className="product-size">{sale.note}</div>}</td><td>{sale.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</td><td>{money(sale.totalMinor)}</td></tr>)}</tbody></table></div> : <EmptyAdmin message="No cash sales recorded yet."/>}
+    {sales.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>When</th><th>Person</th><th>Items</th><th>Total</th><th></th></tr></thead><tbody>{sales.map((sale) => <tr key={sale.id}><td>{new Date(sale.createdAt).toLocaleDateString('en-NZ')}<div className="product-size">{sale.orderNumber}</div></td><td><strong>{sale.recipientName}</strong>{sale.contact && <div className="product-size">{sale.contact}</div>}{sale.note && <div className="product-size">{sale.note}</div>}</td><td>{sale.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</td><td>{money(sale.totalMinor)}</td><td><div className="admin-actions"><button type="button" className="button button-outline button-small" onClick={() => editSale(sale)}>Edit</button><button type="button" className="button button-outline button-small" onClick={() => void removeSale(sale)}>Delete</button></div></td></tr>)}</tbody></table></div> : <EmptyAdmin message="No cash sales recorded yet."/>}
   </AdminLayout>;
 }
 

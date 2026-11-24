@@ -852,7 +852,25 @@ router.get("/admin/products", requireAdmin, async (_req, res): Promise<void> => 
 router.post("/admin/products", requireAdmin, async (req, res): Promise<void> => {
   const parsed = CreateProductBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.message });
+    const path = parsed.error.issues[0]?.path.join(".") ?? "";
+    const message = path.includes("image")
+      ? "Photo links need to start with https://. Leave a photo blank if you do not have one yet."
+      : path.includes("sku")
+        ? "Each size needs a code, and every code has to be different."
+        : path.includes("price")
+          ? "Enter a price in dollars for each size, like 95.00."
+          : path.includes("stock")
+            ? "Stock must be a whole number, zero or more."
+            : path.includes("size")
+              ? "Each size needs a name, like 100ml."
+              : path === "name"
+                ? "Enter the fragrance name."
+                : path === "brand"
+                  ? "Enter the brand."
+                  : path === "audience"
+                    ? "Enter who it is for, such as Men, Women, or Unisex."
+                    : "Check the form. Something required is missing or not in the right format.";
+    res.status(400).json({ error: message });
     return;
   }
   const input = parsed.data;
@@ -897,7 +915,9 @@ router.post("/admin/products", requireAdmin, async (req, res): Promise<void> => 
     res.status(201).json(CreateProductResponse.parse(product));
   } catch (error) {
     req.log.error({ error }, "Failed to create fragrance");
-    res.status(409).json({ error: "Could not save product. Check that each SKU is unique." });
+    const details = JSON.stringify(error);
+    const duplicate = /23505|unique|duplicate/i.test(details);
+    res.status(409).json({ error: duplicate ? "That code is already used on another fragrance. Each size needs its own code." : "Could not save this fragrance. Check the details and try again." });
   }
 });
 
@@ -1268,9 +1288,125 @@ router.get("/admin/cash-sales", requireAdmin, async (_req, res): Promise<void> =
         name: item.productName,
         size: item.variantSize,
         quantity: item.quantity,
+        variantId: item.variantId,
         unitPriceMinor: item.unitPriceMinor,
       })),
   })));
+});
+
+async function restoreCashStock(tx: Parameters<Parameters<typeof db.transaction>[0]>[0], orderId: number, orderNumber: string, actor: string | null) {
+  const lines = await tx.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, orderId));
+  for (const item of lines) {
+    if (item.variantId === null) continue;
+    await tx.update(productVariantsTable).set({ stock: sql`${productVariantsTable.stock} + ${item.quantity}` }).where(eq(productVariantsTable.id, item.variantId));
+    await tx.insert(inventoryMovementsTable).values({
+      variantId: item.variantId,
+      delta: item.quantity,
+      reason: `Cash sale ${orderNumber} reversed`,
+      actorClerkId: actor,
+      orderId,
+    });
+  }
+  return lines;
+}
+
+router.patch("/admin/cash-sales/:id", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const recipientName = typeof req.body?.recipientName === "string" ? req.body.recipientName.trim() : "";
+  const contact = typeof req.body?.contact === "string" ? req.body.contact.trim() : "";
+  const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 280) : "";
+  const variantId = Number(req.body?.variantId);
+  const quantity = Number(req.body?.quantity);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Choose a cash sale to edit." });
+    return;
+  }
+  if (recipientName.length < 2) {
+    res.status(400).json({ error: "Enter the person's name." });
+    return;
+  }
+  if (!Number.isInteger(variantId) || !Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+    res.status(400).json({ error: "Choose a fragrance and a quantity." });
+    return;
+  }
+  try {
+    const order = await db.transaction(async (tx) => {
+      const [current] = await tx.select().from(ordersTable).where(eq(ordersTable.id, id)).for("update");
+      if (!current || current.paymentMethod !== "cash" || current.status !== "paid") {
+        throw new Error("That cash sale can no longer be edited.");
+      }
+      const actor = getAuth(req).userId ?? null;
+      await restoreCashStock(tx, current.id, current.orderNumber, actor);
+      const [variant] = await tx.select().from(productVariantsTable).where(eq(productVariantsTable.id, variantId)).for("update");
+      const [product] = variant
+        ? await tx.select().from(productsTable).where(and(eq(productsTable.id, variant.productId), eq(productsTable.status, "published"))).limit(1)
+        : [];
+      if (!variant || !product || variant.stock < quantity) {
+        throw new Error("There is not enough stock for that fragrance.");
+      }
+      const [reserved] = await tx
+        .update(productVariantsTable)
+        .set({ stock: sql`${productVariantsTable.stock} - ${quantity}` })
+        .where(and(eq(productVariantsTable.id, variant.id), gte(productVariantsTable.stock, quantity)))
+        .returning();
+      if (!reserved) throw new Error("Stock changed while saving this sale.");
+      await tx.delete(orderItemsTable).where(eq(orderItemsTable.orderId, current.id));
+      await tx.insert(orderItemsTable).values({
+        orderId: current.id,
+        variantId: variant.id,
+        productName: product.name,
+        brand: product.brand,
+        variantSize: variant.size,
+        sku: variant.sku,
+        quantity,
+        unitPriceMinor: variant.priceMinor,
+        unitCostMinor: variant.costMinor,
+      });
+      await tx.insert(inventoryMovementsTable).values({
+        variantId: variant.id,
+        delta: -quantity,
+        reason: `Cash sale ${current.orderNumber} updated`,
+        actorClerkId: actor,
+        orderId: current.id,
+      });
+      const totalMinor = variant.priceMinor * quantity;
+      const [saved] = await tx.update(ordersTable).set({
+        recipientName,
+        email: contact.includes("@") ? contact.toLowerCase() : "in-person@arvessofragrances.local",
+        address2: note || null,
+        subtotalMinor: totalMinor,
+        totalMinor,
+      }).where(eq(ordersTable.id, current.id)).returning();
+      return saved;
+    });
+    res.json({ id: order.id, orderNumber: order.orderNumber, totalMinor: order.totalMinor });
+  } catch (error) {
+    req.log.warn({ error }, "Cash sale edit rejected");
+    res.status(400).json({ error: error instanceof Error ? error.message : "Could not update this cash sale." });
+  }
+});
+
+router.delete("/admin/cash-sales/:id", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Choose a cash sale to delete." });
+    return;
+  }
+  try {
+    const removed = await db.transaction(async (tx) => {
+      const [current] = await tx.select().from(ordersTable).where(eq(ordersTable.id, id)).for("update");
+      if (!current || current.paymentMethod !== "cash") throw new Error("That cash sale could not be found.");
+      if (current.status === "paid") {
+        await restoreCashStock(tx, current.id, current.orderNumber, getAuth(req).userId ?? null);
+      }
+      await tx.delete(ordersTable).where(eq(ordersTable.id, current.id));
+      return current;
+    });
+    res.json({ id: removed.id });
+  } catch (error) {
+    req.log.warn({ error }, "Cash sale delete rejected");
+    res.status(400).json({ error: error instanceof Error ? error.message : "Could not delete this cash sale." });
+  }
 });
 
 router.post("/admin/cash-sales", requireAdmin, async (req, res): Promise<void> => {
