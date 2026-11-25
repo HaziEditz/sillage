@@ -12,5 +12,8 @@ export interface AdminDashboard {
   lowStockCount: number;
   pendingOrders: number;
   paidSalesMinor: number;
+  paidTodayMinor: number;
+  toSendCount: number;
+  collectedCount: number;
   recentOrders: Order[];
 }

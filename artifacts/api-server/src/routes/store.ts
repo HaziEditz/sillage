@@ -171,18 +171,30 @@ async function productResults(rows: ProductRow[]) {
   return rows.map((row) => toProduct(row, byProduct.get(row.id) ?? []));
 }
 
-function toOrder(row: OrderRow) {
+function toOrder(row: OrderRow, items: { productName: string; variantSize: string; quantity: number }[] = []) {
   return {
     id: row.id,
     orderNumber: row.orderNumber,
-    email: row.email,
+    email: row.email.endsWith("@arvessofragrances.local") ? "" : row.email,
+    recipientName: row.recipientName,
+    paymentMethod: row.paymentMethod,
+    fulfillment: row.fulfillment,
     status: row.status,
     discountMinor: row.discountMinor,
     totalMinor: row.totalMinor,
     currency: row.currency,
     paypalOrderId: row.paypalOrderId,
     createdAt: row.createdAt,
+    items: items.map((item) => ({ name: item.productName, size: item.variantSize, quantity: item.quantity })),
   };
+}
+
+async function ordersForStudio(rows: OrderRow[]) {
+  const ids = rows.map((row) => row.id);
+  const items = ids.length
+    ? await db.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, ids))
+    : [];
+  return rows.map((row) => toOrder(row, items.filter((item) => item.orderId === row.id)));
 }
 
 function slugify(value: string) {
@@ -823,7 +835,7 @@ router.delete("/admin/reviews/:id", requireAdmin, async (req, res): Promise<void
 });
 
 router.get("/admin/dashboard", requireAdmin, async (req, res): Promise<void> => {
-  const [productCount, lowStockRows, pendingRows, salesRows, recent] =
+  const [productCount, lowStockRows, pendingRows, salesRows, recent, paidTodayRows, toSendRows, collectedRows] =
     await Promise.all([
       db.select({ total: count() }).from(productsTable),
       db
@@ -839,13 +851,29 @@ router.get("/admin/dashboard", requireAdmin, async (req, res): Promise<void> => 
         .from(ordersTable)
         .where(eq(ordersTable.status, "paid")),
       db.select().from(ordersTable).orderBy(desc(ordersTable.createdAt)).limit(8),
+      db.select({ total: sum(ordersTable.totalMinor) }).from(ordersTable).where(and(
+        eq(ordersTable.status, "paid"),
+        sql`(COALESCE(${ordersTable.paidAt}, ${ordersTable.createdAt}) AT TIME ZONE 'Pacific/Auckland')::date = (now() AT TIME ZONE 'Pacific/Auckland')::date`,
+      )),
+      db.select({ total: count() }).from(ordersTable).where(and(
+        eq(ordersTable.status, "paid"),
+        ne(ordersTable.paymentMethod, "cash"),
+        eq(ordersTable.fulfillment, "to_send"),
+      )),
+      db.select({ total: count() }).from(ordersTable).where(and(
+        eq(ordersTable.status, "paid"),
+        eq(ordersTable.paymentMethod, "cash"),
+      )),
     ]);
   const payload = {
     productCount: Number(productCount[0]?.total ?? 0),
     lowStockCount: Number(lowStockRows[0]?.total ?? 0),
     pendingOrders: Number(pendingRows[0]?.total ?? 0),
     paidSalesMinor: Number(salesRows[0]?.total ?? 0),
-    recentOrders: recent.map(toOrder),
+    paidTodayMinor: Number(paidTodayRows[0]?.total ?? 0),
+    toSendCount: Number(toSendRows[0]?.total ?? 0),
+    collectedCount: Number(collectedRows[0]?.total ?? 0),
+    recentOrders: await ordersForStudio(recent),
   };
   req.log.info("Loaded admin overview");
   res.json(GetAdminDashboardResponse.parse(payload));
@@ -1098,7 +1126,7 @@ router.get("/admin/orders", requireAdmin, async (_req, res): Promise<void> => {
     .from(ordersTable)
     .orderBy(desc(ordersTable.createdAt))
     .limit(100);
-  res.json(GetAdminOrdersResponse.parse(orders.map(toOrder)));
+  res.json(GetAdminOrdersResponse.parse(await ordersForStudio(orders)));
 });
 
 router.get("/admin/orders/:id", requireAdmin, async (req, res): Promise<void> => {

@@ -124,16 +124,27 @@ export const GetAdminDashboardResponse = zod.object({
   "lowStockCount": zod.number().int(),
   "pendingOrders": zod.number().int(),
   "paidSalesMinor": zod.number().int(),
+  "paidTodayMinor": zod.number().int(),
+  "toSendCount": zod.number().int(),
+  "collectedCount": zod.number().int(),
   "recentOrders": zod.array(zod.object({
   "id": zod.number().int(),
   "orderNumber": zod.string(),
   "email": zod.string(),
+  "recipientName": zod.string(),
+  "paymentMethod": zod.string(),
+  "fulfillment": zod.string(),
   "status": zod.enum(['pending', 'paid', 'failed', 'cancelled', 'refunded']),
   "discountMinor": zod.number().int(),
   "totalMinor": zod.number().int(),
   "currency": zod.string(),
   "paypalOrderId": zod.string().nullish(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+    "name": zod.string(),
+    "size": zod.string(),
+    "quantity": zod.number().int()
+  }))
 }))
 })
 
@@ -336,12 +347,20 @@ export const GetAdminOrdersResponseItem = zod.object({
   "id": zod.number().int(),
   "orderNumber": zod.string(),
   "email": zod.string(),
+  "recipientName": zod.string(),
+  "paymentMethod": zod.string(),
+  "fulfillment": zod.string(),
   "status": zod.enum(['pending', 'paid', 'failed', 'cancelled', 'refunded']),
   "discountMinor": zod.number().int(),
   "totalMinor": zod.number().int(),
   "currency": zod.string(),
   "paypalOrderId": zod.string().nullish(),
-  "createdAt": zod.coerce.date()
+  "createdAt": zod.coerce.date(),
+  "items": zod.array(zod.object({
+    "name": zod.string(),
+    "size": zod.string(),
+    "quantity": zod.number().int()
+  }))
 })
 export const GetAdminOrdersResponse = zod.array(GetAdminOrdersResponseItem)
 

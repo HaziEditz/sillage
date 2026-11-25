@@ -200,6 +200,9 @@ export interface Order {
   id: number;
   orderNumber: string;
   email: string;
+  recipientName: string;
+  paymentMethod: string;
+  fulfillment: string;
   status: OrderStatus;
   discountMinor: number;
   totalMinor: number;
@@ -207,6 +210,7 @@ export interface Order {
   /** @nullable */
   paypalOrderId?: string | null;
   createdAt: string;
+  items: { name: string; size: string; quantity: number }[];
 }
 
 export interface InventoryAdjustmentInput {
@@ -227,6 +231,9 @@ export interface AdminDashboard {
   lowStockCount: number;
   pendingOrders: number;
   paidSalesMinor: number;
+  paidTodayMinor: number;
+  toSendCount: number;
+  collectedCount: number;
   recentOrders: Order[];
 }
 

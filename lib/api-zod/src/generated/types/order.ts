@@ -11,6 +11,9 @@ export interface Order {
   id: number;
   orderNumber: string;
   email: string;
+  recipientName: string;
+  paymentMethod: string;
+  fulfillment: string;
   status: OrderStatus;
   discountMinor: number;
   totalMinor: number;
@@ -18,4 +21,5 @@ export interface Order {
   /** @nullable */
   paypalOrderId?: string | null;
   createdAt: Date;
+  items: { name: string; size: string; quantity: number }[];
 }

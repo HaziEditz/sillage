@@ -1232,6 +1232,7 @@ function AdminOverview() {
   return <AdminLayout><div className="admin-top"><div><span className="eyebrow">Store overview</span><h1>Good morning.</h1></div><Link className="button button-outline button-small" href="/admin/products">Manage collection</Link></div>
     {isLoading?<div className="metric-grid">{[1,2,3,4].map((i)=><div className="metric skeleton" key={i}/>)}</div>:isError?<><AdminError error={error}/><button className="button button-outline button-small" onClick={()=>void refetch()}>Retry</button></>:<>
       {data && <><div className="metric-grid"><Metric label="Products" value={data.productCount}/><Metric label="Low stock" value={data.lowStockCount}/><Metric label="Pending orders" value={data.pendingOrders}/><Metric label="Paid sales" value={money(data.paidSalesMinor)}/></div>
+      <div className="metric-grid"><Metric label="Paid today" value={money(data.paidTodayMinor)}/><Metric label="To send" value={data.toSendCount}/><Metric label="Collected in person" value={data.collectedCount}/></div>
       <div className="section-top"><div><span className="eyebrow">Latest activity</span><h2 className="section-heading" style={{fontSize:34}}>Recent orders</h2></div><Link className="eyebrow" href="/admin/orders">All orders <ArrowRight size={13}/></Link></div>
       {data.recentOrders.length?<OrderTable orders={data.recentOrders}/>:<EmptyAdmin message="Orders will appear here when customers complete checkout."/>}
       </>}
@@ -1262,8 +1263,18 @@ function Letter({ email }: { email: { to: string; subject: string; body: string 
   </div>;
 }
 
+function orderHow(order: Order) {
+  const pay = order.paymentMethod === 'cash' ? 'Cash' : 'PayPal';
+  const send = order.fulfillment === 'sent' ? 'Sent' : order.paymentMethod === 'cash' || order.fulfillment === 'collected' ? 'Collected' : 'To send';
+  return `${pay} · ${send}`;
+}
+
 function OrderTable({orders}:{orders:Order[]}) {
   const qc = useQueryClient();
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('');
+  const [payment, setPayment] = useState('');
+  const [sending, setSending] = useState('');
   const [selected, setSelected] = useState<number | null>(null);
   const [detail, setDetail] = useState<OrderDetail | null>(null);
   const [note, setNote] = useState('');
@@ -1289,8 +1300,23 @@ function OrderTable({orders}:{orders:Order[]}) {
     })();
     return () => { ignore = true; };
   }, [selected]);
+  const term = query.trim().toLowerCase();
+  const shown = orders.filter((order) => {
+    if (status && order.status !== status) return false;
+    if (payment && order.paymentMethod !== payment) return false;
+    if (sending === 'to_send' && (order.paymentMethod === 'cash' || order.fulfillment !== 'to_send')) return false;
+    if (sending === 'sent' && order.fulfillment !== 'sent') return false;
+    if (sending === 'collected' && order.paymentMethod !== 'cash' && order.fulfillment !== 'collected') return false;
+    if (!term) return true;
+    return [order.orderNumber, order.recipientName, order.email, ...order.items.map((item) => `${item.name} ${item.size}`)].join(' ').toLowerCase().includes(term);
+  });
   return <>
-    <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Status</th><th>Discount</th><th>Total</th></tr></thead><tbody>{orders.map((order)=><tr key={order.id} className={selected===order.id?'selected':''}><td><button type="button" className="text-link" onClick={() => setSelected(selected===order.id?null:order.id)} data-testid={`button-order-${order.id}`}>{order.orderNumber}</button></td><td>{new Date(order.createdAt).toLocaleDateString('en-NZ')}</td><td>{order.email}</td><td><span className="status-pill">{order.status}</span></td><td>{order.discountMinor?`−${money(order.discountMinor,order.currency)}`:'—'}</td><td>{money(order.totalMinor,order.currency)}</td></tr>)}</tbody></table></div>
+    <div className="catalog-tools"><label style={{position:'relative',flex:1}}><Search size={15} style={{position:'absolute',left:13,top:14,color:'#77736b'}}/><input className="field" style={{paddingLeft:38}} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name, fragrance or order" aria-label="Search orders" data-testid="input-search-orders"/></label>
+      <select className="select" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by order status"><option value="">All statuses</option><option value="paid">Paid</option><option value="pending">Pending</option><option value="cancelled">Cancelled</option><option value="refunded">Refunded</option></select>
+      <select className="select" value={payment} onChange={(e) => setPayment(e.target.value)} aria-label="Filter by payment"><option value="">Cash and PayPal</option><option value="cash">Cash</option><option value="paypal">PayPal</option></select>
+      <select className="select" value={sending} onChange={(e) => setSending(e.target.value)} aria-label="Filter by delivery"><option value="">Any delivery</option><option value="to_send">To send</option><option value="sent">Sent</option><option value="collected">Collected</option></select>
+    </div>
+    {shown.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Customer</th><th>What they ordered</th><th>How</th><th>Status</th><th>Total</th></tr></thead><tbody>{shown.map((order)=><tr key={order.id} className={selected===order.id?'selected':''}><td><button type="button" className="text-link" onClick={() => setSelected(selected===order.id?null:order.id)} data-testid={`button-order-${order.id}`}>{order.orderNumber}</button><div className="product-size">{new Date(order.createdAt).toLocaleDateString('en-NZ')}</div></td><td><strong>{order.recipientName}</strong>{order.email && <div className="product-size">{order.email}</div>}</td><td>{order.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ') || '—'}</td><td>{orderHow(order)}</td><td><span className="status-pill">{order.status}</span></td><td>{money(order.totalMinor,order.currency)}{order.discountMinor ? <div className="product-size">−{money(order.discountMinor, order.currency)}</div> : null}</td></tr>)}</tbody></table></div> : <div className="empty-state"><h2>Nothing matches</h2><p>Try another name, fragrance, or filter.</p></div>}
     {error && <div className="notice error">{error}</div>}
     {detail && <article className="order-detail">
       <div className="admin-top"><div><span className="eyebrow">{detail.paymentMethod === 'cash' ? 'Cash, in person' : 'Paid online'} · {detail.fulfillment === 'sent' ? 'Sent' : detail.fulfillment === 'collected' ? 'Collected' : 'To send'}</span><h2>{detail.recipientName}</h2></div><button type="button" className="icon-button" aria-label="Close order" onClick={() => setSelected(null)}><X size={16}/></button></div>
@@ -1517,16 +1543,47 @@ function AdminDiscounts() {
 }
 
 type CashSale = { id: number; orderNumber: string; recipientName: string; contact: string; note: string; totalMinor: number; createdAt: string; items: { name: string; size: string; quantity: number; variantId: number | null; unitPriceMinor: number }[] };
+type CashOption = { id: number; brand: string; name: string; size: string; sku: string; priceMinor: number; stock: number; sample: boolean };
+
+function CashFragranceField({ options, value, onChange }: { options: CashOption[]; value: string; onChange: (id: string) => void }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const selected = options.find((option) => String(option.id) === value);
+  const term = query.trim().toLowerCase();
+  const matches = options.filter((option) => !term || `${option.brand} ${option.name} ${option.size} ${option.sku}`.toLowerCase().includes(term));
+  useEffect(() => {
+    const close = (event: MouseEvent) => { if (!box.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, []);
+  return <div className="cash-picker" ref={box}>
+    <input className="field" value={query} onChange={(event) => { setQuery(event.target.value); setOpen(true); }} onFocus={() => setOpen(true)} placeholder="Search brand, name or size" aria-label="Search fragrance for this cash sale" data-testid="input-cash-search" autoComplete="off"/>
+    {open && <div className="cash-results" role="listbox">{matches.length ? matches.map((option) => <button type="button" key={option.id} onClick={() => { onChange(String(option.id)); setQuery(''); setOpen(false); }} data-testid={`button-cash-option-${option.id}`}><span className="product-brand">{option.brand}</span><strong>{option.name}</strong><span className="product-size">{option.sample ? '2 ml sample' : option.size} · {option.stock} on hand</span><span className="cash-price">{money(option.priceMinor)}</span></button>) : <p className="product-size" style={{margin:0,padding:'14px'}}>No fragrance matches that search.</p>}</div>}
+    {selected && <div className="cash-choice"><div><p className="product-brand" style={{margin:0}}>{selected.brand}</p><strong>{selected.name}</strong><div className="product-size">{selected.sample ? '2 ml sample' : selected.size} · {money(selected.priceMinor)} · {selected.stock} on hand</div></div><button type="button" onClick={() => onChange('')}>Clear</button></div>}
+  </div>;
+}
 
 function AdminCash() {
   const qc = useQueryClient();
   const { data: products, isLoading } = useGetAdminProducts({ query: { queryKey: getGetAdminProductsQueryKey() } });
   const [form, setForm] = useState({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
+  const [formKey, setFormKey] = useState(0);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [sales, setSales] = useState<CashSale[]>([]);
+  const [ledger, setLedger] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const options = (products ?? []).filter((product) => product.status === 'published').flatMap((product) => product.variants.filter((variant) => variant.stock > 0 || variant.id === Number(form.variantId)).map((variant) => ({ id: variant.id, label: `${product.brand} ${product.name} · ${variant.sku.startsWith('SAMPLE-') ? '2 ml sample' : variant.size} · ${money(variant.priceMinor)}`, stock: variant.stock })));
+  const editingSale = sales.find((sale) => sale.id === editingId);
+  const held = new Map((editingSale?.items ?? []).filter((item) => item.variantId != null).map((item) => [item.variantId as number, item.quantity]));
+  const options: CashOption[] = (products ?? []).filter((product) => product.status === 'published').flatMap((product) => product.variants.filter((variant) => variant.stock > 0 || held.has(variant.id) || variant.id === Number(form.variantId)).map((variant) => ({ id: variant.id, brand: product.brand, name: product.name, size: variant.size, sku: variant.sku, priceMinor: variant.priceMinor, stock: variant.stock + (held.get(variant.id) ?? 0), sample: variant.sku.startsWith('SAMPLE-') }))).sort((a, b) => Number(a.sample) - Number(b.sample) || a.brand.localeCompare(b.brand) || a.name.localeCompare(b.name));
+  const selected = options.find((option) => String(option.id) === form.variantId);
+  const available = selected?.stock ?? 0;
+  const quantity = Number(form.quantity);
+  const totalMinor = selected && Number.isInteger(quantity) ? selected.priceMinor * quantity : 0;
+  const ledgerTerm = ledger.trim().toLowerCase();
+  const visibleSales = sales.filter((sale) => !ledgerTerm || [sale.recipientName, sale.contact, sale.note, sale.orderNumber, ...sale.items.map((item) => `${item.name} ${item.size}`)].join(' ').toLowerCase().includes(ledgerTerm));
+  const resetForm = () => { setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' }); setEditingId(null); setFormKey((key) => key + 1); };
   const load = async () => {
     const response = await fetch('/api/admin/cash-sales', { credentials: 'include' });
     const body: unknown = await response.json().catch(() => null);
@@ -1541,7 +1598,10 @@ function AdminCash() {
     event.preventDefault();
     setError('');
     setMessage('');
-    const payload = { recipientName: form.recipientName, contact: form.contact, note: form.note, variantId: Number(form.variantId), quantity: Number(form.quantity) };
+    if (!selected) { setError('Search for the fragrance and choose it from the list.'); return; }
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) { setError('Quantity must be a whole number from 1 to 10.'); return; }
+    if (quantity > available) { setError(`Only ${available} ${available === 1 ? 'is' : 'are'} on hand for that fragrance.`); return; }
+    const payload = { recipientName: form.recipientName, contact: form.contact, note: form.note, variantId: Number(form.variantId), quantity };
     const response = await fetch(editingId ? `/api/admin/cash-sales/${editingId}` : '/api/admin/cash-sales', {
       method: editingId ? 'PATCH' : 'POST',
       credentials: 'include',
@@ -1554,8 +1614,7 @@ function AdminCash() {
       setError(text);
       return;
     }
-    setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
-    setEditingId(null);
+    resetForm();
     setMessage(editingId ? 'Cash sale updated. The stock has been adjusted.' : 'Cash sale recorded. The stock has been reduced.');
     await load();
     await refreshStock();
@@ -1565,6 +1624,7 @@ function AdminCash() {
     setEditingId(sale.id);
     setError('');
     setMessage('');
+    setFormKey((key) => key + 1);
     setForm({ recipientName: sale.recipientName, contact: sale.contact, note: sale.note, variantId: item?.variantId ? String(item.variantId) : '', quantity: String(item?.quantity ?? 1) });
   };
   const removeSale = async (sale: CashSale) => {
@@ -1576,10 +1636,7 @@ function AdminCash() {
       setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not delete this cash sale.');
       return;
     }
-    if (editingId === sale.id) {
-      setEditingId(null);
-      setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' });
-    }
+    if (editingId === sale.id) resetForm();
     setMessage('Cash sale deleted. The stock has been put back.');
     await load();
     await refreshStock();
@@ -1592,12 +1649,13 @@ function AdminCash() {
     <form className="admin-form" onSubmit={(event) => void submit(event)}>
       <label>Name<input required className="field" value={form.recipientName} onChange={(e) => setForm({ ...form, recipientName: e.target.value })} data-testid="input-cash-name"/></label>
       <label>Phone or email<input className="field" value={form.contact} onChange={(e) => setForm({ ...form, contact: e.target.value })} placeholder="Optional"/></label>
-      <label className="wide">What they took<select required className="select" value={form.variantId} onChange={(e) => setForm({ ...form, variantId: e.target.value })} data-testid="select-cash-item"><option value="">Choose a fragrance</option>{options.map((option) => <option key={option.id} value={option.id}>{option.label} · {option.stock} on hand</option>)}</select></label>
-      <label>Quantity<input className="field" type="number" min="1" max="10" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })}/></label>
+      <label className="wide">Fragrance<CashFragranceField key={formKey} options={options} value={form.variantId} onChange={(variantId) => setForm({ ...form, variantId })}/></label>
+      <label>Quantity<input className="field" type="number" min="1" max="10" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} data-testid="input-cash-quantity"/></label>
+      <div className="cash-total"><span className="product-size" style={{margin:0}}>{selected ? `${quantity || 0} × ${money(selected.priceMinor)}` : 'Choose a fragrance to see the total'}</span><strong>{selected ? money(totalMinor) : '—'}</strong></div>
       <label className="wide">Note<textarea className="textarea" rows={3} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="Where you met, or anything you want to remember"/></label>
-      <div className="wide admin-actions"><button className="button button-small" disabled={isLoading} data-testid="button-record-cash">{editingId ? 'Save cash sale' : 'Record cash payment'}</button>{editingId && <button type="button" className="button button-outline button-small" onClick={() => { setEditingId(null); setForm({ recipientName: '', contact: '', note: '', variantId: '', quantity: '1' }); }}>Cancel edit</button>}</div>
+      <div className="wide admin-actions"><button className="button button-small" disabled={isLoading} data-testid="button-record-cash">{editingId ? 'Save cash sale' : 'Record cash payment'}</button>{editingId && <button type="button" className="button button-outline button-small" onClick={resetForm}>Cancel edit</button>}</div>
     </form>
-    {sales.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>When</th><th>Person</th><th>Items</th><th>Total</th><th></th></tr></thead><tbody>{sales.map((sale) => <tr key={sale.id}><td>{new Date(sale.createdAt).toLocaleDateString('en-NZ')}<div className="product-size">{sale.orderNumber}</div></td><td><strong>{sale.recipientName}</strong>{sale.contact && <div className="product-size">{sale.contact}</div>}{sale.note && <div className="product-size">{sale.note}</div>}</td><td>{sale.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</td><td>{money(sale.totalMinor)}</td><td><div className="admin-actions"><button type="button" className="button button-outline button-small" onClick={() => editSale(sale)}>Edit</button><button type="button" className="button button-outline button-small" onClick={() => void removeSale(sale)}>Delete</button></div></td></tr>)}</tbody></table></div> : <EmptyAdmin message="No cash sales recorded yet."/>}
+    {sales.length ? <><div className="catalog-tools"><label style={{position:'relative',flex:1}}><Search size={15} style={{position:'absolute',left:13,top:14,color:'#77736b'}}/><input className="field" style={{paddingLeft:38,maxWidth:'none'}} value={ledger} onChange={(e) => setLedger(e.target.value)} placeholder="Search recorded sales by person, fragrance or order" aria-label="Search cash sales" data-testid="input-search-cash-sales"/></label></div>{visibleSales.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>When</th><th>Person</th><th>Items</th><th>Total</th><th></th></tr></thead><tbody>{visibleSales.map((sale) => <tr key={sale.id}><td>{new Date(sale.createdAt).toLocaleDateString('en-NZ')}<div className="product-size">{sale.orderNumber}</div></td><td><strong>{sale.recipientName}</strong>{sale.contact && <div className="product-size">{sale.contact}</div>}{sale.note && <div className="product-size">{sale.note}</div>}</td><td>{sale.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</td><td>{money(sale.totalMinor)}</td><td><div className="admin-actions"><button type="button" className="button button-outline button-small" onClick={() => editSale(sale)}>Edit</button><button type="button" className="button button-outline button-small" onClick={() => void removeSale(sale)}>Delete</button></div></td></tr>)}</tbody></table></div> : <div className="empty-state"><h2>Nothing matches</h2><p>Try another name or fragrance.</p></div>}</> : <EmptyAdmin message="No cash sales recorded yet."/>}
   </AdminLayout>;
 }
 
