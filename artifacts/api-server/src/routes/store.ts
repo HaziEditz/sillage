@@ -5,6 +5,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
+import { sendStoreMail } from "../lib/mail";
 import { clerkClient, getAuth } from "@clerk/express";
 import {
   and,
@@ -1174,8 +1175,87 @@ router.get("/admin/orders/:id", requireAdmin, async (req, res): Promise<void> =>
   });
 });
 
+function trackingUrl(note: string) {
+  const code = note.trim();
+  if (!/^[A-Za-z0-9]{8,34}$/.test(code)) return "";
+  return `https://www.nzpost.co.nz/tools/tracking?trackid=${encodeURIComponent(code)}`;
+}
+
+function itemLines(items: { brand: string; productName: string; variantSize: string; quantity: number; unitPriceMinor: number }[]) {
+  return items.map((item) => `• ${item.brand} ${item.productName}, ${item.variantSize} × ${item.quantity} — $${money(item.unitPriceMinor * item.quantity)} NZD`);
+}
+
+function confirmationLetter(order: OrderRow, items: { brand: string; productName: string; variantSize: string; quantity: number; unitPriceMinor: number }[]) {
+  const firstName = order.recipientName.trim().split(/\s+/)[0] || order.recipientName;
+  const cash = order.paymentMethod === "cash";
+  const body = [
+    `Hello ${firstName},`,
+    "",
+    cash
+      ? `This is Arvessó Fragrances. Your in-person order ${order.orderNumber} is recorded, and the $${money(order.totalMinor)} NZD cash payment is received.`
+      : `This is Arvessó Fragrances. Your order ${order.orderNumber} is confirmed, and the payment of $${money(order.totalMinor)} NZD has been received.`,
+    "",
+    "What you ordered:",
+    ...itemLines(items),
+    "",
+    cash ? "This was collected in person, so there is nothing to post." : `Send to: ${deliveryAddress(order)}`,
+    cash ? null : "We will email you again when the parcel is posted.",
+    "",
+    "Arvessó Fragrances",
+    "arvessofragrances@gmail.com",
+    "New Zealand",
+  ].filter((line) => line !== null).join("\n");
+  return {
+    to: order.email.endsWith("@arvessofragrances.local") ? "" : order.email,
+    subject: `Your Arvessó Fragrances order ${order.orderNumber}`,
+    body,
+  };
+}
+
+function postedLetter(order: OrderRow, items: { brand: string; productName: string; variantSize: string; quantity: number; unitPriceMinor: number }[]) {
+  const firstName = order.recipientName.trim().split(/\s+/)[0] || order.recipientName;
+  const tracking = order.tracking?.trim() ?? "";
+  const url = trackingUrl(tracking);
+  const body = [
+    `Hello ${firstName},`,
+    "",
+    `This is Arvessó Fragrances. Your order ${order.orderNumber} has been posted.`,
+    "",
+    tracking ? `Tracking: ${tracking}` : "The courier note was left blank.",
+    url ? `Follow it here: ${url}` : null,
+    "",
+    "What was sent:",
+    ...itemLines(items),
+    "",
+    `Send to: ${deliveryAddress(order)}`,
+    "",
+    "If the parcel does not show, reply to this email with your order number.",
+    "",
+    "Arvessó Fragrances",
+    "arvessofragrances@gmail.com",
+    "New Zealand",
+  ].filter((line) => line !== null).join("\n");
+  return {
+    to: order.email.endsWith("@arvessofragrances.local") ? "" : order.email,
+    subject: `Your Arvessó Fragrances order ${order.orderNumber} has been posted`,
+    body,
+  };
+}
+
+async function deliverLetter(req: Request, letter: { to: string; subject: string; body: string }) {
+  if (!letter.to) return { sent: false, email: null };
+  try {
+    const result = await sendStoreMail({ to: letter.to, subject: letter.subject, text: letter.body });
+    if (!result.sent) req.log.warn({ reason: result.reason, to: letter.to }, "Store email was not sent");
+    return { sent: result.sent, email: result.sent ? null : letter };
+  } catch (error) {
+    req.log.warn({ error, to: letter.to }, "Store email failed");
+    return { sent: false, email: letter };
+  }
+}
+
 function orderLetter(order: OrderRow, items: { brand: string; productName: string; variantSize: string; quantity: number; unitPriceMinor: number }[], note: string, refunded: boolean) {
-  const lines = items.map((item) => `• ${item.brand} ${item.productName}, ${item.variantSize} × ${item.quantity} — $${money(item.unitPriceMinor * item.quantity)} NZD`);
+  const lines = itemLines(items);
   const firstName = order.recipientName.trim().split(/\s+/)[0] || order.recipientName;
   const paid = order.status === "paid";
   const payment = order.paymentMethod === "cash"
@@ -1285,19 +1365,40 @@ router.get("/account/orders", async (req, res): Promise<void> => {
 
   const orders = await db
     .select({
+      id: ordersTable.id,
       orderNumber: ordersTable.orderNumber,
       status: ordersTable.status,
       totalMinor: ordersTable.totalMinor,
       currency: ordersTable.currency,
       createdAt: ordersTable.createdAt,
       paidAt: ordersTable.paidAt,
+      paymentMethod: ordersTable.paymentMethod,
+      fulfillment: ordersTable.fulfillment,
+      tracking: ordersTable.tracking,
     })
     .from(ordersTable)
     .where(eq(ordersTable.clerkUserId, clerkUserId))
     .orderBy(desc(ordersTable.createdAt))
     .limit(25);
-
-  res.json(orders);
+  const ids = orders.map((order) => order.id);
+  const items = ids.length
+    ? await db.select().from(orderItemsTable).where(inArray(orderItemsTable.orderId, ids))
+    : [];
+  res.json(orders.map((order) => ({
+    orderNumber: order.orderNumber,
+    status: order.status,
+    totalMinor: order.totalMinor,
+    currency: order.currency,
+    createdAt: order.createdAt,
+    paidAt: order.paidAt,
+    paymentMethod: order.paymentMethod,
+    fulfillment: order.fulfillment,
+    tracking: order.tracking ?? "",
+    trackingUrl: trackingUrl(order.tracking ?? ""),
+    items: items
+      .filter((item) => item.orderId === order.id)
+      .map((item) => ({ name: item.productName, size: item.variantSize, quantity: item.quantity })),
+  })));
 });
 
 router.get("/admin/cash-sales", requireAdmin, async (_req, res): Promise<void> => {
@@ -1546,6 +1647,12 @@ router.post("/admin/cash-sales", requireAdmin, async (req, res): Promise<void> =
       }
       return created;
     });
+    try {
+      const lines = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, order.id));
+      await deliverLetter(req, confirmationLetter(order, lines));
+    } catch (error) {
+      req.log.warn({ error, orderId: order.id }, "Cash confirmation email skipped");
+    }
     res.status(201).json({ id: order.id, orderNumber: order.orderNumber, totalMinor: order.totalMinor });
   } catch (error) {
     req.log.warn({ error }, "Cash sale rejected");
@@ -1632,13 +1739,44 @@ router.post("/admin/delivery/:id/send", requireAdmin, async (req, res): Promise<
       eq(ordersTable.id, id),
       eq(ordersTable.status, "paid"),
       ne(ordersTable.paymentMethod, "cash"),
+      ne(ordersTable.fulfillment, "sent"),
     ))
-    .returning({ id: ordersTable.id, orderNumber: ordersTable.orderNumber });
+    .returning();
   if (!updated) {
     res.status(404).json({ error: "That paid order could not be marked as sent." });
     return;
   }
-  res.json(updated);
+  const lines = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, updated.id));
+  const letter = postedLetter(updated, lines);
+  const mailed = await deliverLetter(req, letter);
+  res.json({ id: updated.id, orderNumber: updated.orderNumber, emailSent: mailed.sent, email: mailed.email });
+});
+
+router.patch("/admin/delivery/:id/tracking", requireAdmin, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const tracking = typeof req.body?.tracking === "string" ? req.body.tracking.trim().slice(0, 160) : "";
+  if (!Number.isInteger(id)) {
+    res.status(400).json({ error: "Choose an order." });
+    return;
+  }
+  const [updated] = await db
+    .update(ordersTable)
+    .set({ tracking: tracking || null })
+    .where(and(
+      eq(ordersTable.id, id),
+      eq(ordersTable.status, "paid"),
+      ne(ordersTable.paymentMethod, "cash"),
+      eq(ordersTable.fulfillment, "sent"),
+    ))
+    .returning();
+  if (!updated) {
+    res.status(404).json({ error: "That posted order could not be updated." });
+    return;
+  }
+  const lines = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, updated.id));
+  const letter = postedLetter(updated, lines);
+  const mailed = await deliverLetter(req, letter);
+  res.json({ id: updated.id, orderNumber: updated.orderNumber, emailSent: mailed.sent, email: mailed.email });
 });
 
 router.post("/checkout/quote", async (req, res): Promise<void> => {
@@ -2141,6 +2279,12 @@ router.post("/checkout/paypal/capture", async (req, res): Promise<void> => {
       }
       res.status(409).json({ error: "Order state changed while verifying payment." });
       return;
+    }
+    try {
+      const lines = await db.select().from(orderItemsTable).where(eq(orderItemsTable.orderId, updated.id));
+      await deliverLetter(req, confirmationLetter(updated, lines));
+    } catch (error) {
+      req.log.warn({ error, orderId: updated.id }, "Order confirmation email skipped");
     }
     res.json(CapturePayPalOrderResponse.parse(toOrder(updated)));
   } catch (error) {

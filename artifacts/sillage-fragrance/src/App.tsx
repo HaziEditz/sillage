@@ -1169,7 +1169,7 @@ function AccountPage() {
 
         <section className="account-section" id="account-orders">
           <div className="account-section-heading"><div><span className="eyebrow">Your purchases</span><h2>Order history</h2></div><Link className="text-link eyebrow" href="/shop">Explore fragrance <ArrowRight size={13}/></Link></div>
-          {ordersLoading ? <div className="skeleton account-orders-loading"/> : ordersError ? <div className="notice error">We couldn’t load your orders. <button className="text-link" type="button" onClick={() => void refetch()}>Try again</button></div> : orders?.length ? <div className="account-order-list">{orders.map((order) => <article className="account-order" key={order.orderNumber}><div><span className="eyebrow">{order.orderNumber}</span><p>{new Intl.DateTimeFormat('en-NZ', { dateStyle: 'medium' }).format(new Date(order.createdAt))}</p></div><span className={`account-order-status status-${order.status}`}>{order.status}</span><strong>{money(order.totalMinor, order.currency)}</strong></article>)}</div> : <div className="account-empty-orders"><Package size={20}/><div><strong>No orders just yet</strong><p>Your completed fragrance orders will appear here.</p></div><Link className="button button-outline button-small" href="/shop">Browse fragrances</Link></div>}
+          {ordersLoading ? <div className="skeleton account-orders-loading"/> : ordersError ? <div className="notice error">We couldn’t load your orders. <button className="text-link" type="button" onClick={() => void refetch()}>Try again</button></div> : orders?.length ? <div className="account-order-list">{orders.map((order) => <article className="account-order" key={order.orderNumber}><div><span className="eyebrow">{order.orderNumber}</span><p>{new Intl.DateTimeFormat('en-NZ', { dateStyle: 'medium' }).format(new Date(order.createdAt))}</p>{order.items.length > 0 && <p>{order.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</p>}{order.paymentMethod === 'cash' ? <p>Collected in person</p> : order.fulfillment === 'sent' ? <p>Posted{order.tracking ? ` · ${order.tracking}` : ''}{order.trackingUrl ? <> · <a href={order.trackingUrl} target="_blank" rel="noreferrer">Track on NZ Post</a></> : null}</p> : order.status === 'paid' ? <p>Paid. We will email you when it is posted.</p> : null}</div><span className={`account-order-status status-${order.status}`}>{order.status}</span><strong>{money(order.totalMinor, order.currency)}</strong></article>)}</div> : <div className="account-empty-orders"><Package size={20}/><div><strong>No orders just yet</strong><p>Your completed fragrance orders will appear here.</p></div><Link className="button button-outline button-small" href="/shop">Browse fragrances</Link></div>}
         </section>
       </div>
     </div>
@@ -1183,6 +1183,11 @@ type AccountOrder = {
   currency: string;
   createdAt: string;
   paidAt: string | null;
+  paymentMethod: string;
+  fulfillment: string;
+  tracking: string;
+  trackingUrl: string;
+  items: { name: string; size: string; quantity: number }[];
 };
 
 async function loadAccountOrders(): Promise<AccountOrder[]> {
@@ -1198,7 +1203,12 @@ async function loadAccountOrders(): Promise<AccountOrder[]> {
     'totalMinor' in order && typeof order.totalMinor === 'number' &&
     'currency' in order && typeof order.currency === 'string' &&
     'createdAt' in order && typeof order.createdAt === 'string' &&
-    'paidAt' in order && (typeof order.paidAt === 'string' || order.paidAt === null)
+    'paidAt' in order && (typeof order.paidAt === 'string' || order.paidAt === null) &&
+    'paymentMethod' in order && typeof order.paymentMethod === 'string' &&
+    'fulfillment' in order && typeof order.fulfillment === 'string' &&
+    'tracking' in order && typeof order.tracking === 'string' &&
+    'trackingUrl' in order && typeof order.trackingUrl === 'string' &&
+    'items' in order && Array.isArray(order.items)
   )) {
     throw new Error('The orders response was not in the expected format.');
   }
@@ -1668,6 +1678,8 @@ function AdminDelivery() {
   const [awaiting, setAwaiting] = useState<DeliveryOrder[]>([]);
   const [sent, setSent] = useState<DeliveryOrder[]>([]);
   const [notes, setNotes] = useState<Record<number, string>>({});
+  const [edits, setEdits] = useState<Record<number, string>>({});
+  const [letter, setLetter] = useState<{ to: string; subject: string; body: string } | null>(null);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1720,14 +1732,36 @@ function AdminDelivery() {
       setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not mark this order as sent.');
       return;
     }
-    setMessage(`${order.orderNumber} is marked sent.`);
+    const mailed = body && typeof body === 'object' && 'emailSent' in body ? body as { emailSent: boolean; email: { to: string; subject: string; body: string } | null } : null;
+    setLetter(mailed?.email ?? null);
+    setMessage(mailed?.emailSent ? `${order.orderNumber} is marked sent and the customer has been emailed.` : mailed?.email ? `${order.orderNumber} is marked sent. The email was not sent automatically, so open it below.` : `${order.orderNumber} is marked sent. This order has no customer email.`);
+    await load();
+  };
+  const saveTracking = async (order: DeliveryOrder) => {
+    setError('');
+    setMessage('');
+    const response = await fetch(`/api/admin/delivery/${order.id}/tracking`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tracking: edits[order.id] ?? order.tracking }),
+    });
+    const body: unknown = await response.json().catch(() => null);
+    if (!response.ok) {
+      setError(body && typeof body === 'object' && 'error' in body && typeof body.error === 'string' ? body.error : 'Could not update this tracking note.');
+      return;
+    }
+    const mailed = body && typeof body === 'object' && 'emailSent' in body ? body as { emailSent: boolean; email: { to: string; subject: string; body: string } | null } : null;
+    setLetter(mailed?.email ?? null);
+    setMessage(mailed?.emailSent ? `${order.orderNumber} tracking was updated and emailed.` : mailed?.email ? `${order.orderNumber} tracking was saved. Open the email below to send it yourself.` : `${order.orderNumber} tracking was saved.`);
     await load();
   };
   return <AdminLayout>
     <div className="admin-top"><div><span className="eyebrow">New Zealand</span><h1>Delivery</h1></div></div>
-    <p className="product-size" style={{marginTop:0}}>Keep one flat courier charge for the whole country. Orders still show the amount at checkout before anyone pays. Cash meetups stay separate and are not posted.</p>
+    <p className="product-size" style={{marginTop:0}}>Keep one flat courier charge for the whole country. Orders still show the amount at checkout before anyone pays. Cash meetups stay separate and are not posted. Marking an order sent emails the customer when mail is connected.</p>
     {error && <div className="notice error">{error}</div>}
     {message && <div className="notice">{message}</div>}
+    {letter && <Letter email={letter}/>}
     <form className="admin-form" onSubmit={(event) => void save(event)}>
       <label>Delivery charge (NZD)<input required className="field" inputMode="decimal" value={fee} onChange={(e) => setFee(e.target.value)} data-testid="input-delivery-fee"/></label>
       <label>Free when the order is over<input className="field" inputMode="decimal" value={freeOver} disabled={!freeOn} onChange={(e) => setFreeOver(e.target.value)} data-testid="input-delivery-free"/></label>
@@ -1736,7 +1770,7 @@ function AdminDelivery() {
     </form>
     <div className="section-top"><div><span className="eyebrow">To post</span><h2 className="section-heading" style={{fontSize:34}}>Paid orders</h2></div></div>
     {loading ? <div className="skeleton" style={{height:180}}/> : awaiting.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Order</th><th>Send to</th><th>Items</th><th>Tracking</th></tr></thead><tbody>{awaiting.map((order) => <tr key={order.id}><td>{order.orderNumber}<div className="product-size">{new Date(order.createdAt).toLocaleDateString('en-NZ')} · {money(order.totalMinor)}</div></td><td><strong>{order.recipientName}</strong><div className="product-size">{order.address}</div><div className="product-size">{order.email}</div></td><td>{order.items.map((item) => `${item.name} · ${item.size} × ${item.quantity}`).join(', ')}</td><td><div className="admin-actions"><input className="field" style={{width:180}} value={notes[order.id] ?? ''} onChange={(e) => setNotes((current) => ({ ...current, [order.id]: e.target.value }))} placeholder="Courier or tracking note"/><button type="button" className="button button-outline button-small" onClick={() => void markSent(order)}>Mark sent</button></div></td></tr>)}</tbody></table></div> : <EmptyAdmin message="No paid orders are waiting to be posted."/>}
-    {sent.length > 0 && <div className="table-wrap" style={{marginTop:24}}><table className="data-table"><thead><tr><th>Sent</th><th>Person</th><th>Note</th></tr></thead><tbody>{sent.map((order) => <tr key={order.id}><td>{order.orderNumber}</td><td>{order.recipientName}</td><td>{order.tracking || '—'}</td></tr>)}</tbody></table></div>}
+    {sent.length > 0 && <div className="table-wrap" style={{marginTop:24}}><table className="data-table"><thead><tr><th>Sent</th><th>Person</th><th>Tracking</th></tr></thead><tbody>{sent.map((order) => <tr key={order.id}><td>{order.orderNumber}</td><td>{order.recipientName}</td><td><div className="admin-actions"><input className="field" style={{width:180}} value={edits[order.id] ?? order.tracking} onChange={(e) => setEdits((current) => ({ ...current, [order.id]: e.target.value }))} placeholder="Tracking number"/><button type="button" className="button button-outline button-small" onClick={() => void saveTracking(order)}>Save and email</button></div></td></tr>)}</tbody></table></div>}
   </AdminLayout>;
 }
 
